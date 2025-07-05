@@ -1,0 +1,45 @@
+INFO:root:Bot de arbitragem iniciado
+INFO:root:Saldo da carteira 0x4727eBdFB2998Ec851c5FFB27bd233aE916Eb525: 70.71117045 Ether
+INFO:root:Saldo da carteira 0x4727eBdFB2998Ec851c5FFB27bd233aE916Eb525: 70.71117045 Ether
+INFO:root:Verificando saldo mínimo...
+INFO:root:Saldo da carteira 0x4727eBdFB2998Ec851c5FFB27bd233aE916Eb525: 70.71117045 Ether
+INFO:root:Saldo mínimo verificado com sucesso
+INFO:root:Liquidez disponível para o token 0x7D1AfA7B718fb893dB30A3aBc0Cfc608AaCfeBB0: 0 Ether
+INFO:root:Liquidez insuficiente para o token MATIC (0x7D1AfA7B718fb893dB30A3aBc0Cfc608AaCfeBB0). Tentando novamente em 60 segundos.
+INFO:root:Liquidez disponível para o token 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174: 1106441248.077970815129396152 Ether
+ERROR:root:Erro ao obter preço na Quickswap para 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174 -> 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174: ("The function 'getAmountsOut' was not found in this contract's abi.", ' Are you sure you provided the correct contract abi?')
+ERROR:root:Erro ao obter preço na Sushiswap para 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174 -> 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174: ("The function 'getAmountsOut' was not found in this contract's abi.", ' Are you sure you provided the correct contract abi?')
+INFO:root:Prices obtained: {'UNISWAP_V3': None, 'QUICKSWAP': None, 'SUSHISWAP': None}
+INFO:root:Preço na Uniswap V3 não disponível.
+INFO:root:Preço na Quickswap não disponível.
+INFO:root:Preço na Sushiswap não disponível.
+INFO:root:Nenhuma oportunidade de arbitragem identificada.
+INFO:root:Nenhuma oportunidade de arbitragem suportada pela liquidez foi encontrada.
+INFO:root:Liquidez disponível para o token 0xc2132D05D31c914a87C6611C10748AEb04B58e8F: 1122714859.170904720817160974 Ether
+ERROR:root:Erro ao obter preço na Quickswap para 0xc2132D05D31c914a87C6611C10748AEb04B58e8F -> 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174: ("The function 'getAmountsOut' was not found in this contract's abi.", ' Are you sure you provided the correct contract abi?')
+ERROR:root:Erro ao obter preço na Sushiswap para 0xc2132D05D31c914a87C6611C10748AEb04B58e8F -> 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174: ("The function 'getAmountsOut' was not found in this contract's abi.", ' Are you sure you provided the correct contract abi?')
+INFO:root:Prices obtained: {'UNISWAP_V3': 98, 'QUICKSWAP': None, 'SUSHISWAP': None}
+INFO:root:Preço na Quickswap não disponível.
+INFO:root:Preço na Sushiswap não disponível.
+INFO:root:Nenhuma oportunidade de arbitragem identificada.
+INFO:root:Nenhuma oportunidade de arbitragem suportada pela liquidez foi encontrada.
+ERROR:root:Erro ao obter liquidez disponível para o token 0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063:
+
+
+
+
+
+# Definir endpoints das APIs das DEXs na Polygon e Arbitrum
+endpoints = {
+    'uniswap': 'https://gateway-arbitrum.network.thegraph.com/api/d907a8f0a86caaaed8bc5536080adc26/subgraphs/id/3hCPRGf4z88VC5rsBKU5AA9FBBq5nF3jbKJG7VZCbhjm',
+    'quickswap': 'https://gateway-arbitrum.network.thegraph.com/api/d907a8f0a86caaaed8bc5536080adc26/subgraphs/id/FqsRcH1XqSjqVx9GRTvEJe959aCbKrcyGgDWBrUkG24g',
+    'sushiswap': 'https://gateway-arbitrum.network.thegraph.com/api/d907a8f0a86caaaed8bc5536080adc26/subgraphs/id/G1Q6dviDfMm6hVLvCqbfeB19kLmvs7qrnBvXeFndjhaU',
+}
+
+
+
+
+
+o que está causando o retorno de None
+
+verificação

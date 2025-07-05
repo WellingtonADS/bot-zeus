@@ -1,0 +1,135 @@
+### Escopo geral: Requisitos do cliente para o Bot Solicitação de Empréstimo na AVE
+
+1. **Relacionamento com a Liquidez de Mercado**
+   - O pedido de empréstimo deve estar diretamente relacionado à liquidez de mercado no momento da solicitação.
+
+2. **Dependência da Liquidez**
+   - O valor solicitado na AVE dependerá da liquidez do mercado naquele momento específico.
+
+3. **Verificação de Oportunidade e Liquidez**
+   - Não basta apenas identificar uma oportunidade; é necessário verificar se a liquidez do mercado atende à oportunidade identificada.
+
+4. **Adequação da Liquidez**
+   - Evitar operações onde a liquidez do mercado não seja suficiente para suportar o valor solicitado.
+   - Exemplo: Não realizar uma operação de um milhão se a liquidez do mercado naquele momento não for suficiente.
+
+5. **Conformidade com a Liquidez**
+   - Se a liquidez do mercado for adequada para o valor solicitado (por exemplo, um milhão), a operação pode ser realizada.
+
+Estrutura do codigo para atender os Requisitos
+
+# Carregar ABI do Uniswap Router
+# Contrato do Uniswap Router
+# Função para obter a taxa de gás
+# Lógica para calcular a quantidade ideal de tokens
+# Vamos buscar a máxima liquidez disponível nas DEXs envolvidas 
+# A quantidade ideal será a menor liquidez disponível nas duas DEXs
+# Ajustar para garantir que as taxas de transação sejam cobertas e o lucro seja positivo
+# Função para obter a liquidez disponível em uma DEX específica
+# Função para obter o saldo de MATIC
+# Função para converter tokens para USDT
+# Verificar e manter 50 MATIC na carteira
+# Função para converter USDT para MATIC
+# Função para realizar o flash loan
+# Função para obter preços dos tokens nas DEXs
+# Função para identificar oportunidades de arbitragem
+# Função para executar a arbitragem
+# Função para calcular a quantidade ideal de tokens para arbitragem
+# Função para Executar Arbitragem e Converter Lucro para USDT*
+# Função para vender tokens na DEX
+# Função para devolver o empréstimo à AAVE
+# Função para obter o saldo de um token específico
+# Função principal do bot de arbitragem
+
+# Função para Executar Arbitragem e Converter Lucro para USDT
+    # Passo 1: Realizar compra na DEX com menor preço
+    # Passo 2: Realizar venda na DEX com maior preço
+    # Passo 3: Devolver empréstimo à AAVE
+    # Passo 4: Converter lucro para USDT
+    # Lógica para comprar tokens na DEX
+
+
+
+---
+
+### Escopo geral: Requisitos do cliente para o Bot Solicitação de Empréstimo na AVE
+
+1. **Relacionamento com a Liquidez de Mercado**
+   - O pedido de empréstimo deve estar diretamente relacionado à liquidez de mercado no momento da solicitação.
+
+2. **Dependência da Liquidez**
+   - O valor solicitado na AVE dependerá da liquidez do mercado naquele momento específico.
+
+3. **Verificação de Oportunidade e Liquidez**
+   - Não basta apenas identificar uma oportunidade; é necessário verificar se a liquidez do mercado atende à oportunidade identificada.
+
+4. **Adequação da Liquidez**
+   - Evitar operações onde a liquidez do mercado não seja suficiente para suportar o valor solicitado.
+   - Exemplo: Não realizar uma operação de um milhão se a liquidez do mercado naquele momento não for suficiente.
+
+5. **Conformidade com a Liquidez**
+   - Se a liquidez do mercado for adequada para o valor solicitado (por exemplo, um milhão), a operação pode ser realizada.
+
+---
+
+Claro! Aqui está uma estrutura de pasta organizada com base nas informações fornecidas:
+
+```
+/projeto
+│
+├── /contracts
+│   ├── AToken.json
+│   ├── lendingPoolAddressesProvider.json
+│   ├── lendingPoolCore.json
+│   ├── lendingPool.json
+│   ├── quickswap_router_abi.json
+│
+├── /src
+│   ├── arbitrage.py
+│   ├── bot_main.py
+│   ├── dex_operations.py
+│   ├── flash_loan.py
+│
+├── /test
+│   ├── test_contract_function.py
+│   ├── test_simulacao_liquidez.py
+│   ├── test_gas.py
+│   ├── test_saldo.py
+│   ├── verificar_conexao.py
+│
+├── /utils
+│   ├── gas_utils.py
+│   ├── liquidity_utils.py
+│   ├── price_utils.py
+│
+├── .env.example
+├── package-lock.json
+├── package.json
+├── rascunho.txt
+├── requirements.txt
+```
+
+### Como as Pastas se Ligam:
+
+1. **contracts**: Contém arquivos JSON que definem os contratos inteligentes e ABIs (Application Binary Interface) necessários para interagir com diferentes protocolos DeFi (como AAVE e Uniswap).
+
+2. **src**: Contém os arquivos principais do código Python que implementam a lógica do bot, incluindo operações de arbitragem, empréstimos flash e interações com DEXs (Exchanges Descentralizadas).
+
+3. **test**: Contém scripts de teste para verificar a funcionalidade do código, como simulações de liquidez, testes de gás e verificação de conexões.
+
+4. **utils**: Contém funções utilitárias que suportam as operações principais, como cálculo de gás, verificação de liquidez e obtenção de preços de tokens.
+
+5. **Arquivos na raiz**:
+   - `.env.example`: Arquivo de exemplo para variáveis de ambiente.
+   - `package-lock.json` e `package.json`: Arquivos de configuração para dependências do projeto.
+   - `rascunho.txt`: Provavelmente um arquivo de anotações ou rascunho.
+   - `requirements.txt`: Lista de dependências Python necessárias para o projeto.
+
+
+
+
+
+
+
+
+    
