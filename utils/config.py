@@ -73,6 +73,22 @@ uniswap_v3_factory_address = Web3.to_checksum_address(obter_variavel_ambiente("U
 uniswap_v3_router_address = Web3.to_checksum_address(obter_variavel_ambiente("UNISWAP_V3_ROUTER_ADDRESS"))
 quoter_address = Web3.to_checksum_address(obter_variavel_ambiente("QUOTER_ADDRESS"))
 
+# Dicionário de Tokens com seus decimais
+TOKENS = {
+    "usdc": {"address": usdc_address, "decimals": 6},
+    "usdt": {"address": usdt_address, "decimals": 6},
+    "weth": {"address": weth_address, "decimals": 18},
+    "dai": {"address": dai_address, "decimals": 18},
+    "wmatic": {"address": wmatic_address, "decimals": 18},
+}
+
+# Mapeamento reverso para buscar decimais pelo endereço
+TOKEN_DECIMALS_BY_ADDRESS = {
+    details["address"]: details["decimals"]
+    for token, details in TOKENS.items()
+}
+
+
 # Instância Web3
 web3_instance = Web3(Web3.HTTPProvider(provider_url))
 web3_instance.middleware_onion.inject(geth_poa_middleware, layer=0)
@@ -112,9 +128,13 @@ def carregar_e_validar_abi(abi_file, contract_address, contract_name):
         logger.error(f"Erro ao carregar ABI ou instanciar o contrato {contract_name}: {e}")
         raise RuntimeError(f"Erro ao carregar ABI ou instanciar o contrato {contract_name}: {e}")
 
-# Função para converter valores para uint256
-def converter_para_uint256(valor):
-    return int(Decimal(valor) * Decimal(10**18))
+# Função para converter valores para a unidade base do token (ex: wei)
+def to_base_unit(valor, decimals):
+    """Converte um valor para sua unidade base, usando o número de decimais especificado."""
+    if not isinstance(valor, (Decimal, str, int, float)):
+        raise TypeError(f"Valor para conversão deve ser numérico, mas é {type(valor)}")
+    # Usar str(valor) para garantir a precisão do Decimal
+    return int(Decimal(str(valor)) * (10**decimals))
 
 # Contratos Dex
 dex_contracts = {
@@ -137,7 +157,7 @@ def obter_saldo(wallet_address):
 
 # Parâmetros de Configuração
 min_profit_ratio = Decimal("1.01")
-amount_in = Web3.to_wei(Decimal("0.003"), 'ether')
+amount_in = Decimal("0.003")  # Valor em formato legível, a ser convertido sob demanda
 gas_limit = 21000000
 slippage_tolerance = Decimal("0.05")
 min_balance = Decimal(40)
@@ -148,6 +168,8 @@ flashloan_contract = carregar_e_validar_abi("FlashLoanReceiver.json", flashloan_
 # Dicionário de Configuração
 config = {
     "web3": web3_instance,
+    "TOKENS": TOKENS,
+    "TOKEN_DECIMALS_BY_ADDRESS": TOKEN_DECIMALS_BY_ADDRESS,
     "nonce_manager": nonce_manager,
     "dex_contracts": dex_contracts,
     "wallet_address": wallet_address,
@@ -168,4 +190,5 @@ config = {
     "gas_limit": gas_limit,
     "slippage_tolerance": slippage_tolerance,
     "min_balance": min_balance,
+    "to_base_unit": to_base_unit,
 }

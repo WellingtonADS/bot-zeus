@@ -13,7 +13,7 @@ sys.path.append(base_dir)
 from utils.gas_utils import obter_taxa_gas
 from utils.nonce_utils import NonceManager
 from utils.address_utils import validar_e_converter_endereco
-from utils.config import config, logger
+from utils.config import config, logger, to_base_unit, TOKEN_DECIMALS_BY_ADDRESS
 from utils.liquidity_utils import obter_liquidez_uniswap_v3
 
 # Variáveis principais do módulo
@@ -122,8 +122,12 @@ def realizar_transacao(dex_contract, token_in, token_out, quantidade, amount_out
     try:
         token_in = validar_e_converter_endereco(token_in)
         token_out = validar_e_converter_endereco(token_out)
-        quantidade_uint256 = int(Decimal(quantidade) * (10 ** 18))
-        amount_out_min_uint256 = int(Decimal(amount_out_min) * (10 ** 18))
+
+        # Converte a quantidade para a unidade base usando os decimais do token de entrada
+        decimals_in = TOKEN_DECIMALS_BY_ADDRESS[token_in]
+        quantidade_uint256 = to_base_unit(quantidade, decimals_in)
+        # amount_out_min já vem na unidade base do token de saída, não precisa de conversão
+        amount_out_min_uint256 = int(amount_out_min)
 
         logger.info(f"Construindo transação de {tipo_transacao} para {quantidade_uint256} de {token_in} para {token_out}")
 
