@@ -1,20 +1,11 @@
 from decimal import Decimal
 from web3 import Web3
 from utils.abi_utils import carregar_abi
-from utils.config import config, logger, converter_para_uint256
+from utils.config import config, logger
 
 # Instância da Web3 e variáveis principais
-web3_instance = config['web3']
-amount_in = config['amount_in']
-
-# Endereços dos Tokens
-tokens = {
-    "usdc": config["usdc_address"],
-    "weth": config["weth_address"],
-    "dai": config["dai_address"],
-    "wmatic": config["wmatic_address"],
-    "usdt": config["usdt_address"]
-}
+TOKENS = config['TOKENS']
+to_base_unit = config['to_base_unit']
 
 # Faixas de taxa (fee tiers) comuns no Uniswap V3
 fee_tiers = [500, 3000, 10000]
@@ -34,13 +25,18 @@ def obter_liquidez_uniswap_v3(token_in_name, token_out_name, amount_in, web3=Non
     """
     web3 = web3 or config['web3']
     dex_data = config['dex_contracts']['UniswapV3']
+    token_in_name_lower = token_in_name.lower()
+    token_out_name_lower = token_out_name.lower()
 
     # Obtenção direta dos endereços dos tokens
-    token_in = tokens.get(token_in_name.lower())
-    token_out = tokens.get(token_out_name.lower())
-    if not token_in or not token_out:
-        logger.error(f"Token {token_in_name} ou {token_out_name} inválido.")
+    token_in_info = TOKENS.get(token_in_name_lower)
+    token_out_info = TOKENS.get(token_out_name_lower)
+
+    if not token_in_info or not token_out_info:
+        logger.error(f"Token {token_in_name} ou {token_out_name} não encontrado na configuração.")
         return {"liquidity": 0, "price": 0, "quoted_price": 0, "fee": None}
+    token_in = token_in_info["address"]
+    token_out = token_out_info["address"]
 
     for fee in fee_tiers:
         try:
@@ -65,7 +61,8 @@ def obter_liquidez_uniswap_v3(token_in_name, token_out_name, amount_in, web3=Non
                 address=dex_data['quoter'].address,
                 abi=carregar_abi_cache('IQuoter.json')
             )
-            amount_in_uint256 = int(amount_in * (10 ** 18))
+            # Converte o valor de entrada para a unidade base do token_in
+            amount_in_uint256 = to_base_unit(amount_in, token_in_info['decimals'])
             quoted_price = quoter_contract.functions.quoteExactInputSingle(
                 token_in, token_out, fee, amount_in_uint256, 0
             ).call()
@@ -96,9 +93,9 @@ def formatar_resultado(dex_data, slippage_tolerance):
         amount_out_min = int(quoted_price * (1 - slippage_tolerance))
 
     return {
-        'liquidity': converter_para_uint256(dex_data['liquidity']),
-        'price': converter_para_uint256(dex_data['price']),
-        'quoted_price': converter_para_uint256(quoted_price),
+        'liquidity': dex_data['liquidity'],  # Já está na unidade base
+        'price': dex_data['price'],  # É um valor Decimal calculado, não converter
+        'quoted_price': quoted_price,  # Já está na unidade base do token de saída
         'amount_out_min': amount_out_min,
         'fee': dex_data['fee']
     }
