@@ -1,111 +1,122 @@
-# deploy.py
 import json
 import os
 import sys
 from web3 import Web3
 from dotenv import load_dotenv
 import logging
-from utils.gas_utils import obter_taxa_gas
-from utils.address_utils import validar_e_converter_endereco
 
-# Configuração de logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Adicionar o diretório raiz ao PYTHONPATH
+# --- Configuração Inicial ---
+# Adiciona o diretório raiz ao PYTHONPATH para encontrar os módulos utilitários
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(base_dir)
 
-# Carregar variáveis de ambiente do arquivo .env
+# Importa utilitários após a configuração do path
+from utils.gas_utils import obter_taxa_gas
+# A função 'validar_e_converter_endereco' não é mais necessária neste script
+# from utils.address_utils import validar_e_converter_endereco
+
+# Configuração do logger
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# --- Carregamento de Configurações ---
 load_dotenv()
 
-# Conectar ao provedor Infura
-w3 = Web3(Web3.HTTPProvider(os.getenv("INFURA_URL")))
-if not w3.is_connected():
-    logger.error("Falha ao conectar ao provedor Infura")
-    raise Exception("Falha ao conectar ao provedor Infura")
+def obter_variavel_essencial(nome_variavel: str) -> str:
+    """Obtém uma variável de ambiente essencial ou lança um erro crítico."""
+    valor = os.getenv(nome_variavel)
+    if not valor:
+        raise ValueError(f"Variável de ambiente essencial '{nome_variavel}' não definida no ficheiro .env.")
+    return valor
 
-# Caminho do arquivo ABI e bytecode do contrato FlashLoanReceiver
-abis_dir = os.path.join(os.path.dirname(__file__), 'abis')
-json_path = os.path.join(abis_dir, "FlashLoanReceiver.json")
-
-# Verificar se o arquivo existe
-if not os.path.exists(json_path):
-    logger.error(f"Arquivo ABI não encontrado: {json_path}")
-    raise FileNotFoundError(f"Arquivo ABI não encontrado: {json_path}")
-
-# Carregar o ABI e bytecode do contrato diretamente no deploy.py
-with open(json_path) as f:
-    contract_json = json.load(f)
-    # Acessa apenas o campo 'abi' que deve conter uma lista, e o 'bytecode' (a chave deve estar presente)
-    contract_abi = contract_json.get("abi")
-    contract_bytecode = contract_json.get("bytecode")
-
-    # Verifique se a ABI e bytecode estão em um formato esperado
-    if not isinstance(contract_abi, list) or not isinstance(contract_bytecode, str):
-        raise ValueError("Formato inválido: 'abi' deve ser uma lista e 'bytecode' deve ser uma string.")
-
-# Criar o contrato FlashLoanReceiver
-FlashLoanReceiver = w3.eth.contract(abi=contract_abi, bytecode=contract_bytecode)
-
-# Carregar e validar endereços diretamente do .env
-provider_address = validar_e_converter_endereco(os.getenv("POOL_ADDRESSES_PROVIDER") or "")
-usdt_address = validar_e_converter_endereco(os.getenv("USDT_ADDRESS") or "")
-wmatic_address = validar_e_converter_endereco(os.getenv("WMATIC_ADDRESS") or "")
-uniswap_router_address = validar_e_converter_endereco(os.getenv("UNISWAP_V3_ROUTER_ADDRESS") or "")
-quickswap_router_address = validar_e_converter_endereco(os.getenv("QUICKSWAP_ROUTER_ADDRESS") or "")
-wallet_address = validar_e_converter_endereco(os.getenv("WALLET_ADDRESS") or "")
-private_key = os.getenv("PRIVATE_KEY")
-
-# Definir o limite de gás fixo diretamente no deploy.py
-gas_limit = 2100000  # Defina o valor de limite de gás desejado
-
-# Verificar saldo da conta
-balance = w3.eth.get_balance(Web3.to_checksum_address(wallet_address))
-logger.info(f"Saldo da conta: {w3.from_wei(balance, 'ether')} ETH")
-
-# Construir a transação de deploy do contrato
+# Conectar ao provedor (ex: Infura, Alchemy)
 try:
-    logger.info("Construindo a transação para implantar o contrato FlashLoanReceiver...")
+    provider_url = obter_variavel_essencial("INFURA_URL")
+    w3 = Web3(Web3.HTTPProvider(provider_url))
+    if not w3.is_connected():
+        raise ConnectionError(f"Falha ao conectar ao provedor em {provider_url}")
+    logger.info(f"Conectado com sucesso à rede (Chain ID: {w3.eth.chain_id}).")
+except (ValueError, ConnectionError) as e:
+    logger.critical(e)
+    sys.exit(1)
 
-    # Obter a taxa de gás
-    gas_price = obter_taxa_gas(w3, logger)
+# --- Carregamento do Contrato ---
+try:
+    # Caminho para o ABI do contrato a ser implantado
+    abis_dir = os.path.join(base_dir, 'abis')
+    json_path = os.path.join(abis_dir, "FlashLoanReceiver.json")
+    
+    with open(json_path) as f:
+        contract_json = json.load(f)
+        contract_abi = contract_json.get("abi")
+        contract_bytecode = contract_json.get("bytecode")
 
-    # Verificar se o saldo cobre o custo do gás
-    required_gas = gas_limit * Web3.to_wei(gas_price, 'gwei')
-    if balance < required_gas:
-        logger.error("Saldo insuficiente para cobrir o custo de gás estimado.")
-        raise Exception("Saldo insuficiente para cobrir o custo de gás estimado.")
+    if not isinstance(contract_abi, list) or not contract_bytecode:
+        raise ValueError("Formato de ABI/Bytecode inválido no ficheiro JSON.")
 
-    transaction = FlashLoanReceiver.constructor(
-        provider_address,
-        usdt_address,
-        wmatic_address,
-        uniswap_router_address,
-        quickswap_router_address
-    ).build_transaction({
+    FlashLoanReceiverContract = w3.eth.contract(abi=contract_abi, bytecode=contract_bytecode)
+    logger.info("ABI e Bytecode do FlashLoanReceiver carregados com sucesso.")
+
+except (FileNotFoundError, ValueError) as e:
+    logger.critical(f"Erro ao carregar o contrato: {e}")
+    sys.exit(1)
+
+# --- Preparação da Transação de Deploy ---
+try:
+    # Carregar e validar endereços e chaves do .env
+    # CORREÇÃO: Validar e converter o endereço diretamente no script
+    # para garantir a inferência de tipo correta pelo Pylance.
+    wallet_address_str = obter_variavel_essencial("WALLET_ADDRESS")
+    if not Web3.is_address(wallet_address_str):
+        raise ValueError(f"Endereço da carteira inválido no .env: {wallet_address_str}")
+    wallet_address = Web3.to_checksum_address(wallet_address_str)
+    
+    private_key = obter_variavel_essencial("PRIVATE_KEY")
+    
+    pool_provider_address_str = obter_variavel_essencial("POOL_ADDRESSES_PROVIDER")
+    if not Web3.is_address(pool_provider_address_str):
+        raise ValueError(f"Endereço do Pool Provider inválido no .env: {pool_provider_address_str}")
+    pool_provider_address = Web3.to_checksum_address(pool_provider_address_str)
+
+    # Verificar saldo da carteira (agora sem erros de tipo)
+    balance_wei = w3.eth.get_balance(wallet_address)
+    logger.info(f"Saldo da carteira {wallet_address}: {w3.from_wei(balance_wei, 'ether')} MATIC")
+
+    # Construir a transação de deploy
+    logger.info("Construindo a transação para implantar o contrato...")
+
+    constructor_args = [pool_provider_address]
+    
+    tx_deploy = FlashLoanReceiverContract.constructor(*constructor_args).build_transaction({
         'from': wallet_address,
-        'nonce': w3.eth.get_transaction_count(Web3.to_checksum_address(wallet_address)),
-        'gas': gas_limit,
-        'gasPrice': Web3.to_wei(gas_price, 'gwei')
+        # Obter nonce (agora sem erros de tipo)
+        'nonce': w3.eth.get_transaction_count(wallet_address),
+        'gasPrice': Web3.to_wei(obter_taxa_gas(w3, logger), 'gwei'),
     })
+    
+    gas_estimate = w3.eth.estimate_gas(tx_deploy)
+    tx_deploy['gas'] = int(gas_estimate * 1.2)
+    logger.info(f"Gás estimado para o deploy: {tx_deploy['gas']}")
 
-    logger.info("Transação construída com sucesso. Assinando a transação...")
+    tx_cost = tx_deploy['gas'] * tx_deploy['gasPrice']
+    if balance_wei < tx_cost:
+        logger.critical(f"Saldo insuficiente para o deploy. Necessário: {w3.from_wei(tx_cost, 'ether')} MATIC")
+        sys.exit(1)
 
-    # Assinar a transação
-    signed_txn = w3.eth.account.sign_transaction(transaction, private_key=private_key)
+    # Assinar e enviar a transação
+    signed_tx = w3.eth.account.sign_transaction(tx_deploy, private_key=private_key)
+    logger.info("Transação assinada. A enviar para a rede...")
 
-    logger.info("Transação assinada. Enviando a transação...")
+    tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+    logger.info(f"Transação enviada! Hash: {tx_hash.hex()}")
+    logger.info("A aguardar confirmação do bloco...")
 
-    # Enviar a transação
-    tx_hash = w3.eth.send_raw_transaction(signed_txn.rawTransaction)
-
-    logger.info(f"Transação enviada. Hash da transação: {tx_hash.hex()}. Aguardando confirmação...")
-
-    # Confirmar a transação
     tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
-    logger.info(f"Contrato implantado com sucesso em: {tx_receipt['contractAddress']}")
+    
+    contract_address = tx_receipt['contractAddress']
+    logger.info(f"🎉 Contrato FlashLoanReceiver implantado com sucesso no endereço: {contract_address} 🎉")
+    logger.info(f"Ver no PolygonScan: https://polygonscan.com/address/{contract_address}")
 
 except Exception as e:
-    logger.error(f"Erro ao implantar o contrato FlashLoanReceiver: {str(e)}")
-    raise
+    logger.critical(f"Erro durante o processo de deploy: {e}", exc_info=True)
+    sys.exit(1)

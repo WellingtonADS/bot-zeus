@@ -1,101 +1,67 @@
-from decimal import Decimal
+import os
+import sys
 from web3 import Web3
-from utils.abi_utils import carregar_abi
+
+# Configuração de diretório base e importações
+base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(base_dir)
+
 from utils.config import config, logger
 
-# Instância da Web3 e variáveis principais
-TOKENS = config['TOKENS']
-to_base_unit = config['to_base_unit']
+# Variáveis principais do módulo
+web3 = config['web3']
 
-# Faixas de taxa (fee tiers) comuns no Uniswap V3
-fee_tiers = [500, 3000, 10000]
-
-# Cache para ABIs para evitar carregamento redundante
-_abi_cache = {}
-
-def carregar_abi_cache(nome_arquivo):
-    """Carrega a ABI do arquivo com cache."""
-    if nome_arquivo not in _abi_cache:
-        _abi_cache[nome_arquivo] = carregar_abi(nome_arquivo)
-    return _abi_cache[nome_arquivo]
-
-def obter_liquidez_uniswap_v3(token_in_name, token_out_name, amount_in, web3=None):
+def obter_preco_saida(dex_nome: str, token_in_address: str, token_out_address: str, quantidade_base_in: int) -> int:
     """
-    Obtém dados de liquidez e preço para um par de tokens no Uniswap V3 em diferentes faixas de taxa.
+    Obtém a quantidade de saída para uma troca, lidando com diferentes DEXs.
+
+    Args:
+        dex_nome: O nome da DEX (ex: "UniswapV3", "SushiSwapV2").
+        token_in_address: Endereço do token de entrada.
+        token_out_address: Endereço do token de saída.
+        quantidade_base_in: A quantidade de entrada na sua unidade base (ex: wei).
+
+    Returns:
+        A quantidade de saída na sua unidade base, ou 0 em caso de erro.
     """
-    web3 = web3 or config['web3']
-    dex_data = config['dex_contracts']['UniswapV3']
-    token_in_name_lower = token_in_name.lower()
-    token_out_name_lower = token_out_name.lower()
+    try:
+        token_in = Web3.to_checksum_address(token_in_address)
+        token_out = Web3.to_checksum_address(token_out_address)
 
-    # Obtenção direta dos endereços dos tokens
-    token_in_info = TOKENS.get(token_in_name_lower)
-    token_out_info = TOKENS.get(token_out_name_lower)
-
-    if not token_in_info or not token_out_info:
-        logger.error(f"Token {token_in_name} ou {token_out_name} não encontrado na configuração.")
-        return {"liquidity": 0, "price": 0, "quoted_price": 0, "fee": None}
-    token_in = token_in_info["address"]
-    token_out = token_out_info["address"]
-
-    for fee in fee_tiers:
-        try:
-            logger.info(f"UniswapV3: Buscando dados para {token_in} - {token_out} com taxa {fee}.")
-            factory_contract = dex_data['factory']
-            pool_address = factory_contract.functions.getPool(token_in, token_out, fee).call()
-
-            if not Web3.is_address(pool_address) or pool_address == "0x0000000000000000000000000000000000000000":
-                logger.warning(f"UniswapV3: Pool inexistente para taxa {fee}.")
-                continue
-
-            pool_contract = web3.eth.contract(address=pool_address, abi=carregar_abi_cache('V3Pool.json'))
-            liquidity = pool_contract.functions.liquidity().call()
-            slot_0 = pool_contract.functions.slot0().call()
-            sqrt_price_x96 = Decimal(slot_0[0])
-            price = (sqrt_price_x96 ** 2) / (2 ** 192)
-            price_scaled = price * Decimal(10 ** 18)
-
-            logger.info(f"Liquidez: {liquidity}, Preço: {price_scaled}")
-
-            quoter_contract = web3.eth.contract(
-                address=dex_data['quoter'].address,
-                abi=carregar_abi_cache('IQuoter.json')
-            )
-            # Converte o valor de entrada para a unidade base do token_in
-            amount_in_uint256 = to_base_unit(amount_in, token_in_info['decimals'])
-            quoted_price = quoter_contract.functions.quoteExactInputSingle(
-                token_in, token_out, fee, amount_in_uint256, 0
+        # Lógica para Roteadores V3 (Uniswap V3)
+        if dex_nome == "UniswapV3":
+            quoter_contract = config['dex_contracts']['UniswapV3']['quoter']
+            # A taxa do pool (fee) é um desafio para arbitragem genérica.
+            # 3000 (0.3%) é a mais comum para os principais pares.
+            # Para um bot real, seria necessário encontrar a taxa correta do pool.
+            fee = 3000
+            
+            return quoter_contract.functions.quoteExactInputSingle(
+                token_in,
+                token_out,
+                fee,
+                quantidade_base_in,
+                0  # sqrtPriceLimitX96
             ).call()
 
-            return formatar_resultado({
-                "liquidity": liquidity,
-                "price": price_scaled,
-                "quoted_price": quoted_price,
-                "fee": fee
-            }, config['slippage_tolerance'])
+        # Lógica para Roteadores V2 (Sushiswap, Quickswap)
+        elif dex_nome in ["SushiSwapV2", "QuickSwapV2"]:
+            router_contract = config['dex_contracts'][dex_nome]['router']
+            path = [token_in, token_out]
+            amounts_out = router_contract.functions.getAmountsOut(quantidade_base_in, path).call()
+            return amounts_out[1]  # O segundo elemento é a quantidade de saída
 
-        except Exception as e:
-            logger.error(f"Erro na taxa {fee}: {e}")
-            continue
+        else:
+            logger.warning(f"DEX '{dex_nome}' não suportada pela função obter_preco_saida.")
+            return 0
 
-    logger.warning(f"UniswapV3: Nenhuma liquidez encontrada para o par {token_in_name} e {token_out_name}.")
-    return {"liquidity": 0, "price": 0, "quoted_price": 0, "fee": None}
+    except Exception as e:
+        # Erros de "insufficient liquidity" são comuns e podem ser logados como DEBUG
+        if 'insufficient liquidity' in str(e).lower():
+            logger.debug(f"Liquidez insuficiente para {token_in[-4:]}->{token_out[-4:]} em {dex_nome}.")
+        else:
+            logger.error(f"Erro ao obter preço de saída em {dex_nome}: {e}")
+        return 0
 
-def formatar_resultado(dex_data, slippage_tolerance):
-    """
-    Formata o resultado de acordo com a tolerância de slippage.
-    """
-    quoted_price = dex_data.get('quoted_price', 0)
-    if quoted_price <= 0:
-        logger.warning("`quoted_price` inválido.")
-        amount_out_min = 0
-    else:
-        amount_out_min = int(quoted_price * (1 - slippage_tolerance))
-
-    return {
-        'liquidity': dex_data['liquidity'],  # Já está na unidade base
-        'price': dex_data['price'],  # É um valor Decimal calculado, não converter
-        'quoted_price': quoted_price,  # Já está na unidade base do token de saída
-        'amount_out_min': amount_out_min,
-        'fee': dex_data['fee']
-    }
+# As funções antigas como formatar_resultado e obter_liquidez_uniswap_v3 podem ser removidas
+# se não forem mais utilizadas em outras partes do seu código.

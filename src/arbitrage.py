@@ -1,6 +1,6 @@
 """
-arbitrage.py
-Módulo para identificar e executar oportunidades de arbitragem em DEXs usando flash loans.
+Módulo para identificar e executar oportunidades de arbitragem em diferentes DEXs
+utilizando a infraestrutura de Flash Loans da Aave.
 """
 
 import os
@@ -9,122 +9,169 @@ import time
 from decimal import Decimal
 from eth_abi.abi import encode
 
-# Configuração de diretório base e importações
+# --- Configuração de Caminhos e Importações ---
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(base_dir)
 
-from utils.liquidity_utils import obter_liquidez_uniswap_v3, formatar_resultado
-from src.flash_loan import comprar_token, vender_token, iniciar_flash_loan
-from utils.config import config, logger, obter_saldo
-from utils.nonce_utils import NonceManager
+from src.flash_loan import iniciar_operacao_flash_loan
+from utils.config import config
+from utils.liquidity_utils import obter_preco_saida
+# CORREÇÃO: Importar a nova função de gestão de saldo
+from utils.wallet_manager import verificar_saldo_matic_suficiente
 
-# Configurações principais
+# --- Variáveis Globais do Módulo ---
 web3 = config['web3']
+logger = config['logger']
 wallet_address = config['wallet_address']
-nonce_manager = config['nonce_manager']
-min_balance = config['min_balance']
-min_profit_ratio = config['min_profit_ratio']
-slippage_tolerance = config['slippage_tolerance']
-amount_in = config['amount_in']
+dex_contracts = config['dex_contracts']
+TOKENS = config['TOKENS']
+# CORREÇÃO: Obter o saldo mínimo do config
+min_balance_matic = config['min_balance_matic']
 
-# Endereços dos tokens
-tokens = {
-    "usdc": config["usdc_address"],
-    "weth": config["weth_address"],
-    "dai": config["dai_address"],
-    "wmatic": config["wmatic_address"],
-    "usdt": config["usdt_address"]
-}
 
-def identificar_oportunidades_arbitragem(amount_in):
-    """Identifica a melhor oportunidade de arbitragem entre pools do Uniswap V3 para pares de tokens especificados."""
+def identificar_melhor_oportunidade(token_emprestimo: str, quantidade_emprestimo: float):
+    """
+    Identifica a melhor oportunidade de arbitragem entre diferentes DEXs.
+    """
     melhor_oportunidade = None
-    melhor_margem = Decimal(0)
+    melhor_lucro_bruto = 0
 
-    token_pairs = [(token_in, token_out) for token_in in tokens for token_out in tokens if token_in != token_out]
-    for token_in, token_out in token_pairs:
-        token_in_address = tokens[token_in]
-        token_out_address = tokens[token_out]
+    for token_alvo_info in TOKENS.values():
+        if token_alvo_info['address'] == token_emprestimo:
+            continue
+        
+        token_alvo = token_alvo_info['address']
 
-        liquidez = obter_liquidez_uniswap_v3(token_in, token_out, amount_in, web3)
-        if liquidez["quoted_price"] > 0:
-            resultado_formatado = formatar_resultado(liquidez, slippage_tolerance)
-            margem_alcancada = Decimal(resultado_formatado['quoted_price']) / Decimal(resultado_formatado['price'])
+        for dex_compra_nome in dex_contracts:
+            for dex_venda_nome in dex_contracts:
+                if dex_compra_nome == dex_venda_nome:
+                    continue
 
-            if margem_alcancada >= min_profit_ratio and margem_alcancada > melhor_margem:
-                melhor_oportunidade = (token_in_address, token_out_address, resultado_formatado)
-                melhor_margem = margem_alcancada
-                logger.info(f"Oportunidade: Comprar {token_in}, vender {token_out} com margem {margem_alcancada}")
+                try:
+                    quantidade_base_emprestimo = config['to_base'](web3, quantidade_emprestimo, token_emprestimo)
+                    
+                    quantidade_recebida_base = obter_preco_saida(
+                        dex_compra_nome, token_emprestimo, token_alvo, quantidade_base_emprestimo
+                    )
 
-    logger.info("Nenhuma oportunidade adequada encontrada." if not melhor_oportunidade else f"Melhor oportunidade selecionada: {melhor_margem}")
+                    if quantidade_recebida_base == 0:
+                        continue
+
+                    quantidade_final_base = obter_preco_saida(
+                        dex_venda_nome, token_alvo, token_emprestimo, quantidade_recebida_base
+                    )
+
+                    lucro_bruto_base = quantidade_final_base - quantidade_base_emprestimo
+                    
+                    if lucro_bruto_base > melhor_lucro_bruto and lucro_bruto_base > 0:
+                        melhor_lucro_bruto = lucro_bruto_base
+                        lucro_bruto_estimado_decimal = config['from_base'](web3, lucro_bruto_base, token_emprestimo)
+                        
+                        token_symbol = next((key for key, value in TOKENS.items() if value['address'] == token_emprestimo), "TOKEN")
+
+                        melhor_oportunidade = {
+                            "token_alvo": token_alvo,
+                            "dex_compra": dex_contracts[dex_compra_nome]['router'].address,
+                            "dex_venda": dex_contracts[dex_venda_nome]['router'].address,
+                            "lucro_bruto_estimado": lucro_bruto_estimado_decimal,
+                            "dex_compra_nome": dex_compra_nome,
+                            "dex_venda_nome": dex_venda_nome
+                        }
+                        logger.info(f"Nova oportunidade: {lucro_bruto_estimado_decimal:.6f} {token_symbol.upper()}. Comprar em {dex_compra_nome}, Vender em {dex_venda_nome}.")
+
+                except Exception as e:
+                    logger.debug(f"Erro ao verificar par {token_emprestimo[-4:]}/{token_alvo[-4:]} em {dex_compra_nome}/{dex_venda_nome}: {e}")
+                    continue
+    
+    if melhor_oportunidade:
+        logger.info(f"Melhor oportunidade selecionada: Lucro de {melhor_oportunidade['lucro_bruto_estimado']:.6f}. Comprar em {melhor_oportunidade['dex_compra_nome']}, Vender em {melhor_oportunidade['dex_venda_nome']}.")
+    
     return melhor_oportunidade
 
-def executar_arbitragem_com_flashloan(token_in, token_out, amount_in, dados_arbitragem):
-    """Executa uma operação de arbitragem com flash loan usando o melhor par identificado."""
+
+def executar_arbitragem_com_flashloan(oportunidade: dict, token_emprestimo: str, quantidade_emprestimo: float):
+    """
+    Executa a operação de arbitragem com flash loan.
+    """
     try:
-        nonce_manager.sync_with_network()
-        amount_out_min_compra = dados_arbitragem['quoted_price']
-        amount_out_min_venda = int(dados_arbitragem['quoted_price'] * (1 - slippage_tolerance))
+        saldo_inicial = config['web3'].eth.get_balance(wallet_address)
+        logger.info(f"Saldo inicial de MATIC: {web3.from_wei(saldo_inicial, 'ether')}")
 
-        margem_alcancada = Decimal(amount_out_min_venda) / Decimal(amount_out_min_compra)
-        if margem_alcancada < min_profit_ratio:
-            logger.warning(f"Margem insuficiente para {token_in}/{token_out}: {margem_alcancada}")
-            return
+        token_alvo = oportunidade['token_alvo']
+        dex_compra = oportunidade['dex_compra']
+        dex_venda = oportunidade['dex_venda']
 
-        expectedProfit = amount_out_min_venda - amount_out_min_compra
-        requiredProfit = int(amount_out_min_compra * (min_profit_ratio - 1))
-        if expectedProfit < requiredProfit:
-            logger.warning(f"Lucro esperado ({expectedProfit}) menor que o necessário ({requiredProfit}).")
-            return
-
-        logger.info(f"Executando arbitragem: amount_in: {amount_in}, expectedProfit: {expectedProfit}")
-
-        # Parâmetros de execução
-        dexCallData = encode(
-            ['address', 'address', 'uint24', 'address', 'uint256', 'uint256', 'uint160'],
-            [token_in, token_out, 3000, wallet_address, amount_in, amount_out_min_compra, 0]
-        )
-        params = encode(
-            ['address', 'bytes', 'uint256'],
-            [config['dex_contracts']['UniswapV3']['router'].address, dexCallData, expectedProfit]
+        params_codificados = encode(
+            ['address', 'address', 'address'],
+            [token_alvo, dex_compra, dex_venda]
         )
 
-        # Iniciar flash loan e operações de compra/venda
-        iniciar_flash_loan([token_in], [amount_in], [0], params)
-        comprar_token(config['dex_contracts']['UniswapV3']['router'], token_in, token_out, amount_in, amount_out_min_compra, nonce_manager)
-        nonce_manager.increment_nonce()
-        vender_token(config['dex_contracts']['UniswapV3']['router'], token_out, token_in, amount_in, amount_out_min_venda, nonce_manager)
-        nonce_manager.increment_nonce()
+        logger.info("Iniciando a transação de flash loan e arbitragem...")
+        
+        receipt = iniciar_operacao_flash_loan(
+            token_a_emprestar=token_emprestimo,
+            quantidade_a_emprestar=quantidade_emprestimo,
+            params_codificados=params_codificados
+        )
 
-        verificar_lucro_apos_arbitragem(obter_saldo(wallet_address), obter_saldo(wallet_address))
+        if receipt and receipt['status'] == 1:
+            logger.info("Transação de arbitragem executada com sucesso!")
+            saldo_final = config['web3'].eth.get_balance(wallet_address)
+            verificar_lucro_apos_arbitragem(saldo_inicial, saldo_final, receipt)
+        else:
+            logger.error("A transação de arbitragem falhou.")
 
     except Exception as e:
-        logger.error(f"Erro na execução da arbitragem: {str(e)}")
+        logger.critical(f"Erro crítico na execução da arbitragem: {e}")
 
-def verificar_lucro_apos_arbitragem(saldo_inicial, saldo_final):
-    """Calcula e verifica o lucro da operação."""
-    lucro = saldo_final - saldo_inicial
-    logger.info(f"Lucro obtido: {lucro} MATIC" if lucro > 0 else "Nenhum lucro obtido.")
+def verificar_lucro_apos_arbitragem(saldo_inicial_wei, saldo_final_wei, receipt):
+    """Calcula e verifica o lucro da operação em MATIC (gás)."""
+    if not receipt:
+        logger.error("Não foi possível verificar o lucro pois o recibo da transação é inválido.")
+        return
+
+    custo_gas_wei = receipt.get('gasUsed', 0) * receipt.get('effectiveGasPrice', 0)
+    lucro_liquido_wei = (saldo_final_wei - saldo_inicial_wei)
+    
+    lucro_matic = web3.from_wei(lucro_liquido_wei, 'ether')
+    custo_gas_matic = web3.from_wei(custo_gas_wei, 'ether')
+
+    logger.info(f"Custo da transação (gás): {custo_gas_matic:.8f} MATIC")
+    if lucro_matic > 0:
+        logger.info(f"🎉 Lucro líquido obtido (refletido no saldo de MATIC): {lucro_matic:.8f} MATIC 🎉")
+    else:
+        logger.warning(f"Prejuízo na operação (refletido no saldo de MATIC): {lucro_matic:.8f} MATIC")
+
 
 def iniciar_bot_arbitragem(stop_event):
-    """Inicia o bot de arbitragem em loop contínuo até o stop_event."""
+    """Inicia o bot de arbitragem em loop contínuo."""
+    TOKEN_EMPRESTIMO = TOKENS['usdc']['address']
+    QUANTIDADE_EMPRESTIMO = 1000.0
+
+    logger.info("🤖 Bot de Arbitragem ZEUS iniciado.")
+    logger.info(f"A procurar oportunidades com {QUANTIDADE_EMPRESTIMO} USDC.")
+
     while not stop_event.is_set():
         try:
-            saldo_atual = obter_saldo(wallet_address)
-            if saldo_atual < min_balance:
-                logger.warning(f"Saldo insuficiente ({saldo_atual} MATIC), requer mínimo de {min_balance} MATIC.")
-                time.sleep(60)
+            # CORREÇÃO: Usa a função centralizada para verificar o saldo
+            if not verificar_saldo_matic_suficiente(web3, wallet_address, min_balance_matic):
+                time.sleep(300) # Pausa por 5 minutos se o saldo for baixo
                 continue
 
-            melhor_oportunidade = identificar_oportunidades_arbitragem(amount_in)
+            logger.info("Procurando nova oportunidade de arbitragem...")
+            melhor_oportunidade = identificar_melhor_oportunidade(TOKEN_EMPRESTIMO, QUANTIDADE_EMPRESTIMO)
+            
             if melhor_oportunidade:
-                token_in_address, token_out_address, dados_arbitragem = melhor_oportunidade
-                if not stop_event.is_set():
-                    executar_arbitragem_com_flashloan(token_in_address, token_out_address, amount_in, dados_arbitragem)
+                logger.info("Oportunidade viável encontrada! A executar...")
+                executar_arbitragem_com_flashloan(melhor_oportunidade, TOKEN_EMPRESTIMO, QUANTIDADE_EMPRESTIMO)
+            else:
+                logger.info("Nenhuma oportunidade lucrativa encontrada no momento.")
 
         except Exception as e:
-            logger.error(f"Erro ao identificar oportunidades: {str(e)}")
+            logger.error(f"Erro no loop principal do bot: {e}", exc_info=True)
 
-        intervalo_reinicio = 60
-        logger.info(f"Aguardando {intervalo_reinicio} segundos antes de reiniciar.")
-        time.sleep(intervalo_reinicio)
+        intervalo_segundos = 60
+        logger.info(f"Aguardando {intervalo_segundos} segundos para a próxima verificação.")
+        time.sleep(intervalo_segundos)
+
+    logger.info("Bot de arbitragem parado.")

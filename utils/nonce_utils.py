@@ -1,82 +1,84 @@
-#utils\nonce_utils.py
 """
-Este módulo fornece utilitários para gerenciar nonces em transações Ethereum.
+Este módulo fornece uma classe robusta para gerenciar nonces em transações Ethereum,
+prevenindo erros de nonce duplicado ou "nonce too low".
 
 Classes:
-    NonceManager: Uma classe para gerenciar o nonce para um determinado endereço de carteira Ethereum.
-
-Funções:
-    __init__(self, web3, wallet_address): Inicializa o NonceManager com uma instância Web3 e um endereço de carteira.
-    get_nonce(self, refresh=False): Retorna o nonce atual, opcionalmente atualizando-o da rede.
-    increment_nonce(self): Incrementa o nonce em um.
-    sync_with_network(self): Sincroniza o nonce com a rede.
-
-Exemplo de uso:
-
-    web3 = Web3(Web3.HTTPProvider('http://127.0.0.1:8545'))
-    wallet_address = '0xSeuEnderecoDeCarteira'
-    nonce_manager = NonceManager(web3, wallet_address)
-
-    nonce_atual = nonce_manager.get_nonce()
-    nonce_manager.increment_nonce()
-    nonce_sincronizado = nonce_manager.sync_with_network()
+    NonceManager: Gerencia o nonce para um endereço de carteira, com sincronização
+                  automática e manual com a rede.
 """
 import logging
 from web3 import Web3
+# CORREÇÃO: Importar ChecksumAddress diretamente da sua biblioteca de origem (eth-typing)
+# para garantir a máxima compatibilidade com linters como o Pylance.
+from eth_typing import ChecksumAddress
+from web3.types import TxReceipt
 
-logger = logging.getLogger("arbitrage_bot")
+# Usa o logger centralizado configurado em utils.config
+logger = logging.getLogger("bot_zeus")
 
 class NonceManager:
+    """
+    Uma classe para gerenciar o nonce de uma carteira de forma segura.
 
-    def __init__(self, web3, wallet_address):
+    Mantém um contador de nonce local que é incrementado após cada transação bem-sucedida
+    e pode ser ressincronizado com a rede para garantir consistência.
+    """
+
+    def __init__(self, web3: Web3, wallet_address: str):
+        """
+        Inicializa o NonceManager.
+
+        Args:
+            web3: Uma instância Web3 conectada à rede.
+            wallet_address: O endereço da carteira para gerenciar o nonce.
+        """
         self.web3 = web3
-        self.wallet_address = Web3.to_checksum_address(wallet_address)
+        # A anotação de tipo agora usa o import direto de eth_typing, que resolve o erro.
+        self.wallet_address: ChecksumAddress = Web3.to_checksum_address(wallet_address)
+        self.nonce: int = -1  # Inicializa com -1 para indicar que ainda não foi sincronizado
+        self.sync_with_network() # Sincroniza o nonce na inicialização
 
-        try:
-            self.nonce = self.web3.eth.get_transaction_count(self.wallet_address)
-            logger.info(f"Nonce inicializado com valor da rede: {self.nonce}")
-        except Exception as e:
-            logger.critical(f"Erro ao inicializar o NonceManager: {str(e)}")
-            raise RuntimeError("Não foi possível obter o nonce inicial da rede.")
+    def get_nonce(self, refresh: bool = False) -> int:
+        """
+        Retorna o nonce atual.
 
-    def get_nonce(self, refresh=False):
-        """ Retorna o nonce atual, opcionalmente atualizando da rede. """
-        try:
-            if refresh:
-                self.nonce = self.web3.eth.get_transaction_count(self.wallet_address)
-                logger.info(f"Nonce atualizado da rede: {self.nonce}")
-            return self.nonce
-        except ValueError as e:
-            logger.error(f"Erro ao obter nonce da rede: {str(e)}", exc_info=True)
-            raise
+        Args:
+            refresh: Se True, força uma nova sincronização com a rede antes de retornar.
 
-    def increment_nonce(self):
-        """ Incrementa o nonce manualmente. """
+        Returns:
+            O nonce atual.
+        """
+        if refresh:
+            self.sync_with_network()
+        return self.nonce
+
+    def increment_nonce(self) -> None:
+        """Incrementa o nonce local em 1."""
         self.nonce += 1
         logger.debug(f"Nonce incrementado localmente para: {self.nonce}")
 
-    def incrementar_se_confirmado(self, tx_receipt):
-        """ Incrementa o nonce somente se a transação for confirmada com sucesso. """
-        if tx_receipt['status'] == 1:
+    def incrementar_se_confirmado(self, tx_receipt: TxReceipt) -> None:
+        """
+        Incrementa o nonce somente se a transação for confirmada com sucesso.
+        Se a transação falhar, ressincroniza com a rede para evitar inconsistências.
+        """
+        if tx_receipt and tx_receipt.get('status') == 1:
             self.increment_nonce()
         else:
-            logger.error("A transação falhou. Nonce não será incrementado.")
-            self.reset_nonce()  # Sincroniza o nonce novamente em caso de falha
+            logger.warning("A transação falhou ou o recibo é inválido. Nonce não será incrementado.")
+            self.sync_with_network()
 
-    def reset_nonce(self):
-        """ Atualiza o nonce diretamente da rede para evitar inconsistências. """
-        try:
-            self.nonce = self.web3.eth.get_transaction_count(self.wallet_address)
-            logger.warning(f"Nonce reiniciado e sincronizado com a rede após falha: {self.nonce}")
-        except ValueError as e:
-            logger.error(f"Erro ao sincronizar nonce com a rede após falha: {e}", exc_info=True)
-            raise
-
-    def sync_with_network(self):
-        """ Sincroniza o nonce diretamente com a rede. """
+    def sync_with_network(self) -> None:
+        """
+        Sincroniza o nonce local com o nonce atual da rede.
+        Esta é a única função para buscar o nonce da blockchain.
+        """
         try:
             self.nonce = self.web3.eth.get_transaction_count(self.wallet_address)
             logger.info(f"Nonce sincronizado com a rede: {self.nonce}")
-        except ValueError as e:
-            logger.error(f"Erro ao sincronizar nonce com a rede: {e}", exc_info=True)
-            raise
+        except Exception as e:
+            logger.critical(f"Erro crítico ao sincronizar nonce com a rede para o endereço {self.wallet_address}: {e}", exc_info=True)
+            # Em caso de falha crítica, não podemos prosseguir com transações
+            raise RuntimeError("Não foi possível obter o nonce da rede.")
+
+# A função 'reset_nonce' foi removida por ser redundante com 'sync_with_network'.
