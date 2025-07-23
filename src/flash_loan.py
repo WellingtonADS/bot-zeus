@@ -1,19 +1,17 @@
 import os
 import sys
 from web3 import Web3
-from web3.types import TxReceipt
+from web3.types import TxReceipt, TxParams
 from hexbytes import HexBytes
 
 # --- Configuração de Caminhos e Importações ---
-# Garante que outros módulos do projeto possam ser importados
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(base_dir)
 
-# Importa o objeto de configuração centralizado e utilitários
 from utils.config import config
 from utils.gas_utils import obter_taxa_gas
 
-# --- Variáveis Globais do Módulo (obtidas da configuração) ---
+# --- Variáveis Globais do Módulo ---
 web3: Web3 = config['web3']
 logger = config['logger']
 private_key = config['private_key']
@@ -22,23 +20,25 @@ flashloan_contract = config['flashloan_contract']
 
 # --- Funções de Transação ---
 
-def enviar_transacao_assinada(signed_tx) -> HexBytes:
-    """Envia uma transação assinada e retorna o hash como HexBytes."""
+def enviar_transacao_assinada(tx: TxParams) -> HexBytes:
+    """Assina e envia uma transação, retornando o hash."""
     try:
         logger.info("Enviando transação para a rede...")
+        signed_tx = web3.eth.account.sign_transaction(tx, private_key)
         tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
         logger.info(f"Transação enviada com sucesso. Hash: {tx_hash.hex()}")
         return tx_hash
     except Exception as e:
-        tx_details = signed_tx.transaction
+        # CORREÇÃO: O log de erro agora mostra a exceção principal, que é mais informativa
+        # e evita o AttributeError.
         logger.error(
-            f"Erro ao enviar transação. Nonce: {tx_details.get('nonce')}, "
-            f"Gas Price: {tx_details.get('gasPrice')}. Erro: {e}"
+            f"Erro ao enviar transação. Nonce: {tx.get('nonce')}. "
+            f"Causa: {e}"
         )
         raise
 
 def aguardar_recibo_transacao(tx_hash: HexBytes, timeout_segundos: int = 180) -> TxReceipt:
-    """Aguarda o recibo da transação, recebendo o hash como HexBytes."""
+    """Aguarda o recibo da transação."""
     try:
         logger.info(f"Aguardando recibo para a transação {tx_hash.hex()}...")
         receipt = web3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout_segundos)
@@ -46,7 +46,7 @@ def aguardar_recibo_transacao(tx_hash: HexBytes, timeout_segundos: int = 180) ->
         if receipt['status'] == 1:
             logger.info(f"Transação {tx_hash.hex()} confirmada com sucesso no bloco {receipt['blockNumber']}.")
         else:
-            logger.warning(f"Transação {tx_hash.hex()} falhou. Status: 0. Bloco: {receipt['blockNumber']}.")
+            logger.warning(f"Transação {tx_hash.hex()} falhou (revertida). Status: 0.")
         
         return receipt
     except Exception as e:
@@ -59,14 +59,12 @@ def iniciar_operacao_flash_loan(
     token_a_emprestar: str,
     quantidade_a_emprestar: float,
     params_codificados: bytes
-) -> TxReceipt:
+) -> TxReceipt | None:
     """
-    Prepara e envia a transação para iniciar a operação de Flash Loan no contrato inteligente.
-
-    Esta é a única função que o bot de arbitragem deve chamar neste módulo.
+    Prepara e envia a transação para iniciar a operação de Flash Loan.
     """
+    tx = None # Inicializa tx para o bloco except
     try:
-        # Usa a função centralizada para converter a quantidade para a unidade base
         quantidade_em_unidade_base = config['to_base'](web3, quantidade_a_emprestar, token_a_emprestar)
         
         logger.info(
@@ -74,7 +72,6 @@ def iniciar_operacao_flash_loan(
             f"({quantidade_em_unidade_base} na unidade base)."
         )
 
-        # A nova função 'initiateFlashLoan' no contrato espera apenas 3 argumentos
         tx_func = flashloan_contract.functions.initiateFlashLoan(
             Web3.to_checksum_address(token_a_emprestar),
             quantidade_em_unidade_base,
@@ -91,8 +88,7 @@ def iniciar_operacao_flash_loan(
             'nonce': nonce,
         })
 
-        signed_tx = web3.eth.account.sign_transaction(tx, private_key)
-        tx_hash = enviar_transacao_assinada(signed_tx)
+        tx_hash = enviar_transacao_assinada(tx)
         receipt = aguardar_recibo_transacao(tx_hash)
 
         nonce_manager.incrementar_se_confirmado(receipt)
@@ -100,11 +96,6 @@ def iniciar_operacao_flash_loan(
         return receipt
 
     except Exception as e:
-        logger.critical(f"Falha crítica ao executar o flash loan: {e}", exc_info=True)
-        # Em caso de falha, é prudente ressincronizar o nonce com a rede
+        logger.critical(f"Falha crítica ao executar o flash loan: {e}")
         nonce_manager.sync_with_network()
-        raise
-
-# As funções de swap standalone (definir_funcao_transacao, realizar_transacao, etc.)
-# foram removidas, pois a lógica de swap agora reside inteiramente no contrato inteligente,
-# resolvendo o item 1.3 do ToDo e limpando o código.
+        return None # Retorna None em caso de falha

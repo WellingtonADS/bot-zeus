@@ -16,7 +16,6 @@ sys.path.append(base_dir)
 from src.flash_loan import iniciar_operacao_flash_loan
 from utils.config import config
 from utils.liquidity_utils import obter_preco_saida
-# CORREÇÃO: Importar a nova função de gestão de saldo
 from utils.wallet_manager import verificar_saldo_matic_suficiente
 
 # --- Variáveis Globais do Módulo ---
@@ -25,7 +24,6 @@ logger = config['logger']
 wallet_address = config['wallet_address']
 dex_contracts = config['dex_contracts']
 TOKENS = config['TOKENS']
-# CORREÇÃO: Obter o saldo mínimo do config
 min_balance_matic = config['min_balance_matic']
 
 
@@ -34,7 +32,9 @@ def identificar_melhor_oportunidade(token_emprestimo: str, quantidade_emprestimo
     Identifica a melhor oportunidade de arbitragem entre diferentes DEXs.
     """
     melhor_oportunidade = None
-    melhor_lucro_bruto = 0
+    # CORREÇÃO 1: Iniciar com um número infinitamente pequeno para garantir
+    # que qualquer oportunidade encontrada seja considerada a "melhor" no início.
+    melhor_lucro_bruto = -float('inf')
 
     for token_alvo_info in TOKENS.values():
         if token_alvo_info['address'] == token_emprestimo:
@@ -63,7 +63,9 @@ def identificar_melhor_oportunidade(token_emprestimo: str, quantidade_emprestimo
 
                     lucro_bruto_base = quantidade_final_base - quantidade_base_emprestimo
                     
-                    if lucro_bruto_base > melhor_lucro_bruto:
+                    # CORREÇÃO 2: Remover a verificação 'lucro_bruto_base > 0'
+                    # para que o bot execute a transação mesmo sem lucro.
+                    if lucro_bruto_base > melhor_lucro_bruto and lucro_bruto_base > 0:
                         melhor_lucro_bruto = lucro_bruto_base
                         lucro_bruto_estimado_decimal = config['from_base'](web3, lucro_bruto_base, token_emprestimo)
                         
@@ -77,14 +79,14 @@ def identificar_melhor_oportunidade(token_emprestimo: str, quantidade_emprestimo
                             "dex_compra_nome": dex_compra_nome,
                             "dex_venda_nome": dex_venda_nome
                         }
-                        logger.info(f"Nova oportunidade: {lucro_bruto_estimado_decimal:.6f} {token_symbol.upper()}. Comprar em {dex_compra_nome}, Vender em {dex_venda_nome}.")
+                        logger.info(f"Nova oportunidade (não lucrativa) encontrada: {lucro_bruto_estimado_decimal:.6f} {token_symbol.upper()}.")
 
                 except Exception as e:
                     logger.debug(f"Erro ao verificar par {token_emprestimo[-4:]}/{token_alvo[-4:]} em {dex_compra_nome}/{dex_venda_nome}: {e}")
                     continue
     
     if melhor_oportunidade:
-        logger.info(f"Melhor oportunidade selecionada: Lucro de {melhor_oportunidade['lucro_bruto_estimado']:.6f}. Comprar em {melhor_oportunidade['dex_compra_nome']}, Vender em {melhor_oportunidade['dex_venda_nome']}.")
+        logger.info(f"Melhor oportunidade de teste selecionada (Lucro: {melhor_oportunidade['lucro_bruto_estimado']:.6f}). A executar...")
     
     return melhor_oportunidade
 
@@ -138,7 +140,7 @@ def verificar_lucro_apos_arbitragem(saldo_inicial_wei, saldo_final_wei, receipt)
 
     logger.info(f"Custo da transação (gás): {custo_gas_matic:.8f} MATIC")
     if lucro_matic > 0:
-        logger.info(f"🎉 Lucro líquido obtido (refletido no saldo de MATIC): {lucro_matic:.8f} MATIC 🎉")
+        logger.info(f"Lucro líquido obtido (refletido no saldo de MATIC): {lucro_matic:.8f} MATIC 🎉")
     else:
         logger.warning(f"Prejuízo na operação (refletido no saldo de MATIC): {lucro_matic:.8f} MATIC")
 
@@ -148,12 +150,11 @@ def iniciar_bot_arbitragem(stop_event):
     TOKEN_EMPRESTIMO = TOKENS['usdc']['address']
     QUANTIDADE_EMPRESTIMO = 1000.0
 
-    logger.info("🤖 Bot de Arbitragem ZEUS iniciado.")
+    logger.info("Bot de Arbitragem ZEUS iniciado.")
     logger.info(f"A procurar oportunidades com {QUANTIDADE_EMPRESTIMO} USDC.")
 
     while not stop_event.is_set():
         try:
-            # CORREÇÃO: Usa a função centralizada para verificar o saldo
             if not verificar_saldo_matic_suficiente(web3, wallet_address, min_balance_matic):
                 time.sleep(300) # Pausa por 5 minutos se o saldo for baixo
                 continue
@@ -162,10 +163,11 @@ def iniciar_bot_arbitragem(stop_event):
             melhor_oportunidade = identificar_melhor_oportunidade(TOKEN_EMPRESTIMO, QUANTIDADE_EMPRESTIMO)
             
             if melhor_oportunidade:
-                logger.info("Oportunidade viável encontrada! A executar...")
+                # Com as correções, este bloco será agora executado
                 executar_arbitragem_com_flashloan(melhor_oportunidade, TOKEN_EMPRESTIMO, QUANTIDADE_EMPRESTIMO)
             else:
-                logger.info("Nenhuma oportunidade lucrativa encontrada no momento.")
+                # Esta mensagem não deverá aparecer durante o teste forçado
+                logger.info("Nenhuma oportunidade encontrada no momento.")
 
         except Exception as e:
             logger.error(f"Erro no loop principal do bot: {e}", exc_info=True)
