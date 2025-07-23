@@ -1,0 +1,36 @@
+# ===================================================================
+# CONFIGURAÇÃO PARA TESTES LOCAIS COM GANACHE (FORK DA MAINNET)
+# ===================================================================
+
+# Apontar para o servidor local do Ganache
+INFURA_URL=http://127.0.0.1:7545
+
+# Usar a carteira de testes fornecida pelo Ganache
+WALLET_ADDRESS=0xC26cD0a2f2E3d7AAD94B23B4FAF7c5BE775B3b26
+PRIVATE_KEY=0xd1d7e299e87c724ef7d613b6ae733cfcf609108895eff83e6fae7b095db4b996
+
+# Endereço do contrato recém-implantado na sua rede Ganache
+FLASHLOAN_CONTRACT_ADDRESS=0x5e04bB61AE0190236b602603662A6699c848666e
+
+# ===================================================================
+# ENDEREÇOS DA MAINNET (MANTER COMO ESTÃO PARA O FORK FUNCIONAR)
+# ===================================================================
+
+POLYGONSCAN_API_KEY=JHFSCY6JMPX196CX46GTX5CNF73TQWI8TX
+
+# Endereço do Provedor da Aave V3 na Polygon Mainnet
+POOL_ADDRESSES_PROVIDER=0xa97684EaD0e402dC232d5A977953DF7ECBaB3CDb
+
+# Endereços dos Tokens na Polygon Mainnet
+USDT_ADDRESS=0xc2132D05D31c914A87C6611C10748AEb04B58e8F
+USDC_ADDRESS=0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174
+WMATIC_ADDRESS=0x0d500b1D8e8eF31e21C99d1Db9A6444d3ADf1270
+# CORREÇÃO: Adicionada a variável WETH_ADDRESS em falta
+WETH_ADDRESS=0x7ceb23fd6bc0add59e62ac25578270cff1b9f619
+DAI_ADDRESS=0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063
+
+# Endereços das DEXs na Polygon Mainnet
+UNISWAP_V3_ROUTER_ADDRESS=0xE592427A0AEce92De3Edee1F18E0157C05861564
+QUICKSWAP_ROUTER_ADDRESS=0xa5E0829CaCED8fFDD4De3c43696c57f7D7A678ff
+SUSHISWAP_ROUTER_ADDRESS=0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506
+QUOTER_ADDRESS=0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6
