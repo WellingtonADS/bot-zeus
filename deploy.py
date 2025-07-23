@@ -6,14 +6,11 @@ from dotenv import load_dotenv
 import logging
 
 # --- Configuração Inicial ---
-# Adiciona o diretório raiz ao PYTHONPATH para encontrar os módulos utilitários
-base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+base_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(base_dir)
 
 # Importa utilitários após a configuração do path
 from utils.gas_utils import obter_taxa_gas
-# A função 'validar_e_converter_endereco' não é mais necessária neste script
-# from utils.address_utils import validar_e_converter_endereco
 
 # Configuração do logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -42,7 +39,6 @@ except (ValueError, ConnectionError) as e:
 
 # --- Carregamento do Contrato ---
 try:
-    # Caminho para o ABI do contrato a ser implantado
     abis_dir = os.path.join(base_dir, 'abis')
     json_path = os.path.join(abis_dir, "FlashLoanReceiver.json")
     
@@ -63,9 +59,6 @@ except (FileNotFoundError, ValueError) as e:
 
 # --- Preparação da Transação de Deploy ---
 try:
-    # Carregar e validar endereços e chaves do .env
-    # CORREÇÃO: Validar e converter o endereço diretamente no script
-    # para garantir a inferência de tipo correta pelo Pylance.
     wallet_address_str = obter_variavel_essencial("WALLET_ADDRESS")
     if not Web3.is_address(wallet_address_str):
         raise ValueError(f"Endereço da carteira inválido no .env: {wallet_address_str}")
@@ -78,18 +71,15 @@ try:
         raise ValueError(f"Endereço do Pool Provider inválido no .env: {pool_provider_address_str}")
     pool_provider_address = Web3.to_checksum_address(pool_provider_address_str)
 
-    # Verificar saldo da carteira (agora sem erros de tipo)
     balance_wei = w3.eth.get_balance(wallet_address)
-    logger.info(f"Saldo da carteira {wallet_address}: {w3.from_wei(balance_wei, 'ether')} MATIC")
+    logger.info(f"Saldo da carteira {wallet_address}: {w3.from_wei(balance_wei, 'ether')} ETH")
 
-    # Construir a transação de deploy
     logger.info("Construindo a transação para implantar o contrato...")
 
     constructor_args = [pool_provider_address]
     
     tx_deploy = FlashLoanReceiverContract.constructor(*constructor_args).build_transaction({
         'from': wallet_address,
-        # Obter nonce (agora sem erros de tipo)
         'nonce': w3.eth.get_transaction_count(wallet_address),
         'gasPrice': Web3.to_wei(obter_taxa_gas(w3, logger), 'gwei'),
     })
@@ -100,14 +90,14 @@ try:
 
     tx_cost = tx_deploy['gas'] * tx_deploy['gasPrice']
     if balance_wei < tx_cost:
-        logger.critical(f"Saldo insuficiente para o deploy. Necessário: {w3.from_wei(tx_cost, 'ether')} MATIC")
+        logger.critical(f"Saldo insuficiente para o deploy. Necessário: {w3.from_wei(tx_cost, 'ether')} ETH")
         sys.exit(1)
 
-    # Assinar e enviar a transação
     signed_tx = w3.eth.account.sign_transaction(tx_deploy, private_key=private_key)
     logger.info("Transação assinada. A enviar para a rede...")
 
-    tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+    # CORREÇÃO: Usar 'raw_transaction' em vez de 'rawTransaction'
+    tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
     logger.info(f"Transação enviada! Hash: {tx_hash.hex()}")
     logger.info("A aguardar confirmação do bloco...")
 
@@ -115,7 +105,6 @@ try:
     
     contract_address = tx_receipt['contractAddress']
     logger.info(f"🎉 Contrato FlashLoanReceiver implantado com sucesso no endereço: {contract_address} 🎉")
-    logger.info(f"Ver no PolygonScan: https://polygonscan.com/address/{contract_address}")
 
 except Exception as e:
     logger.critical(f"Erro durante o processo de deploy: {e}", exc_info=True)

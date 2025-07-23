@@ -6,7 +6,6 @@ from decimal import Decimal
 from dotenv import load_dotenv
 from web3 import Web3
 from web3.middleware.geth_poa import geth_poa_middleware
-# from uniswap import Uniswap # REMOVIDO: SDK não será utilizado
 
 # --- 1. CONFIGURAÇÃO DE CAMINHOS E LOGGER ---
 
@@ -96,16 +95,28 @@ logger.info("Conexão com a rede Polygon estabelecida com sucesso.")
 ABIS_DIR = os.path.join(BASE_DIR, 'abis')
 
 def carregar_abi_localmente(nome_ficheiro_abi: str) -> list:
-    """Carrega um ficheiro JSON de ABI do diretório 'abis'."""
+    """
+    Carrega um ficheiro JSON de ABI do diretório 'abis'.
+    Lida tanto com artefactos do Hardhat (objetos com uma chave 'abi')
+    quanto com ficheiros que são apenas a lista do ABI.
+    """
     caminho_abi = os.path.join(ABIS_DIR, nome_ficheiro_abi)
     try:
         with open(caminho_abi, 'r') as f:
-            return json.load(f)
+            data = json.load(f)
+            # CORREÇÃO: Verifica se o JSON é um objeto (dict) e tem a chave 'abi'
+            if isinstance(data, dict) and 'abi' in data:
+                return data['abi']
+            # Se for uma lista, é o ABI diretamente
+            elif isinstance(data, list):
+                return data
+            else:
+                raise ValueError("Formato de ABI inválido: não é uma lista nem um objeto com a chave 'abi'.")
     except FileNotFoundError:
         logger.critical(f"Ficheiro ABI não encontrado: {caminho_abi}")
         raise
-    except json.JSONDecodeError:
-        logger.critical(f"Erro ao decodificar o JSON do ABI: {caminho_abi}")
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.critical(f"Erro ao ler ou processar o ficheiro ABI '{nome_ficheiro_abi}': {e}")
         raise
 
 def carregar_contrato(abi_nome: str, endereco: str, nome_legivel: str):
@@ -181,9 +192,6 @@ dex_contracts = {
 
 # Contrato de Flash Loan
 flashloan_contract = carregar_contrato("FlashLoanReceiver.json", FLASHLOAN_CONTRACT_ADDRESS, "FlashLoan Receiver")
-
-# REMOVIDO: Cliente Uniswap não é mais necessário
-# uniswap_client = Uniswap(WALLET_ADDRESS, PRIVATE_KEY, PROVIDER_URL, version=3)
 
 
 # Dicionário de configuração final para ser importado por outros módulos

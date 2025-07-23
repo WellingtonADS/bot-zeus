@@ -63,7 +63,7 @@ def identificar_melhor_oportunidade(token_emprestimo: str, quantidade_emprestimo
 
                     lucro_bruto_base = quantidade_final_base - quantidade_base_emprestimo
                     
-                    if lucro_bruto_base > melhor_lucro_bruto and lucro_bruto_base > 0:
+                    if lucro_bruto_base > melhor_lucro_bruto:
                         melhor_lucro_bruto = lucro_bruto_base
                         lucro_bruto_estimado_decimal = config['from_base'](web3, lucro_bruto_base, token_emprestimo)
                         
