@@ -148,7 +148,7 @@ def verificar_lucro_apos_arbitragem(saldo_inicial_wei, saldo_final_wei, receipt)
 def iniciar_bot_arbitragem(stop_event):
     """Inicia o bot de arbitragem em loop contínuo."""
     TOKEN_EMPRESTIMO = TOKENS['usdc']['address']
-    QUANTIDADE_EMPRESTIMO = 1000.0
+    QUANTIDADE_EMPRESTIMO = 35000.0
 
     logger.info("Bot de Arbitragem ZEUS iniciado.")
     logger.info(f"A procurar oportunidades com {QUANTIDADE_EMPRESTIMO} USDC.")

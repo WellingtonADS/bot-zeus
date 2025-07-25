@@ -211,5 +211,5 @@ config = {
     
     # Parâmetros de execução
     "gas_limit": 3000000,
-    "min_balance_matic": Decimal(20),
+    "min_balance_matic": Decimal(5),
 }
