@@ -16,12 +16,12 @@ sys.path.append(base_dir)
 
 from src.flash_loan import iniciar_operacao_flash_loan
 from utils.config import config
-# ATUALIZAÇÃO: Importar as novas funções de liquidez e otimização
-from utils.liquidity_utils import obter_reservas_pool_v2
+# Funções são importadas diretamente
+from utils.liquidity_utils import obter_reservas_pool_v2, obter_preco_saida
 from utils.optimization_utils import calcular_quantidade_otima
 from utils.wallet_manager import verificar_saldo_matic_suficiente
-# ATUALIZAÇÃO: Importar o novo oráculo de preços
 from utils.price_oracle import obter_preco_matic_em_usdc
+from utils.gas_utils import obter_taxa_gas
 
 # --- Variáveis Globais do Módulo ---
 web3 = config['web3']
@@ -30,7 +30,6 @@ wallet_address = config['wallet_address']
 dex_contracts = config['dex_contracts']
 TOKENS = config['TOKENS']
 min_balance_matic = config['min_balance_matic']
-# ATUALIZAÇÃO: Taxa do Flash Loan da Aave (0.09%)
 TAXA_FLASH_LOAN = Decimal("0.0009")
 
 def calcular_lucro_liquido_esperado(
@@ -41,26 +40,23 @@ def calcular_lucro_liquido_esperado(
     """
     Calcula o lucro líquido esperado de uma operação, descontando todos os custos.
     """
-    # Converter para formato legível para os cálculos
     lucro_bruto = config['from_base'](web3, lucro_bruto_base, token_emprestimo_address)
     quantidade_emprestimo = config['from_base'](web3, quantidade_emprestimo_base, token_emprestimo_address)
 
-    # 1. Calcular a taxa do Flash Loan
     custo_flash_loan = quantidade_emprestimo * TAXA_FLASH_LOAN
 
-    # 2. Estimar o custo do gás em USDC
-    preco_gas_gwei = Decimal(config['gas_utils'].obter_taxa_gas(web3, logger))
+    # CORREÇÃO: Chamar a função obter_taxa_gas diretamente
+    preco_gas_gwei = Decimal(obter_taxa_gas(web3, logger))
     gas_limit = Decimal(config['gas_limit'])
     preco_matic_usdc = obter_preco_matic_em_usdc()
     
     if preco_matic_usdc == 0:
         logger.warning("Não foi possível obter o preço do MATIC. O cálculo do custo do gás será impreciso.")
-        custo_gas_usdc = Decimal("inf") # Impede a execução se o preço do gás for desconhecido
+        custo_gas_usdc = Decimal("inf")
     else:
         custo_gas_matic = web3.from_wei(int(gas_limit * preco_gas_gwei), 'gwei')
         custo_gas_usdc = custo_gas_matic * preco_matic_usdc
 
-    # 3. Calcular o Lucro Líquido
     lucro_liquido = lucro_bruto - custo_flash_loan - custo_gas_usdc
     
     logger.debug(f"Cálculo de Lucro: Bruto={lucro_bruto:.4f}, Custo FlashLoan={custo_flash_loan:.4f}, Custo Gás={custo_gas_usdc:.4f} -> Líquido={lucro_liquido:.4f}")
@@ -76,13 +72,11 @@ def identificar_melhor_oportunidade(token_emprestimo: str):
     melhor_oportunidade = None
     melhor_lucro_liquido = Decimal(0)
 
-    # Itera sobre todos os tokens para encontrar um para arbitrar
     for token_alvo_info in TOKENS.values():
         if token_alvo_info['address'] == token_emprestimo:
             continue
         token_alvo = token_alvo_info['address']
 
-        # Itera sobre todas as combinações de DEXs V2
         dexs_v2 = [dex for dex in dex_contracts if "V2" in dex]
         for dex_compra_nome in dexs_v2:
             for dex_venda_nome in dexs_v2:
@@ -90,35 +84,30 @@ def identificar_melhor_oportunidade(token_emprestimo: str):
                     continue
 
                 try:
-                    # 1. Obter as reservas de liquidez de ambos os pools
                     reservas_compra = obter_reservas_pool_v2(dex_compra_nome, token_emprestimo, token_alvo)
                     reservas_venda = obter_reservas_pool_v2(dex_venda_nome, token_emprestimo, token_alvo)
 
                     if not reservas_compra or not reservas_venda:
                         continue
 
-                    # 2. Calcular a quantidade ótima para a arbitragem
-                    # (reserva_token_emprestimo, reserva_token_alvo)
                     quantidade_otima_base = calcular_quantidade_otima(
-                        reservas_compra[0], reservas_compra[1], # Pool de Compra
-                        reservas_venda[1], reservas_venda[0]  # Pool de Venda (ordem invertida)
+                        reservas_compra[0], reservas_compra[1],
+                        reservas_venda[1], reservas_venda[0]
                     )
 
                     if quantidade_otima_base == 0:
                         continue
 
-                    # 3. Simular a transação com a quantidade ótima para obter o lucro bruto
-                    # Swap 1: token_emprestimo -> token_alvo
-                    amount_out_swap1 = config['liquidity_utils'].obter_preco_saida(dex_compra_nome, token_emprestimo, token_alvo, quantidade_otima_base)
-                    # Swap 2: token_alvo -> token_emprestimo
-                    amount_out_swap2 = config['liquidity_utils'].obter_preco_saida(dex_venda_nome, token_alvo, token_emprestimo, amount_out_swap1)
+                    # CORREÇÃO: Chamar a função obter_preco_saida diretamente
+                    amount_out_swap1 = obter_preco_saida(dex_compra_nome, token_emprestimo, token_alvo, quantidade_otima_base)
+                    # CORREÇÃO: Chamar a função obter_preco_saida diretamente
+                    amount_out_swap2 = obter_preco_saida(dex_venda_nome, token_alvo, token_emprestimo, amount_out_swap1)
                     
                     lucro_bruto_base = amount_out_swap2 - quantidade_otima_base
 
                     if lucro_bruto_base <= 0:
                         continue
 
-                    # 4. Calcular o lucro líquido, descontando todos os custos
                     lucro_liquido = calcular_lucro_liquido_esperado(lucro_bruto_base, quantidade_otima_base, token_emprestimo)
 
                     if lucro_liquido > melhor_lucro_liquido:
@@ -147,7 +136,7 @@ def executar_arbitragem_com_flashloan(oportunidade: dict):
     Executa a operação de arbitragem com a quantidade de empréstimo otimizada.
     """
     try:
-        token_emprestimo = config['TOKENS']['usdc']['address'] # Assumindo que o empréstimo é em USDC
+        token_emprestimo = config['TOKENS']['usdc']['address']
         quantidade_emprestimo = oportunidade['quantidade_emprestimo']
 
         logger.info(f"Executando arbitragem com {quantidade_emprestimo:.4f} USDC...")
