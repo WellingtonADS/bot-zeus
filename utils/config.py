@@ -68,6 +68,8 @@ try:
     QUOTER_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("QUOTER_ADDRESS"))
     SUSHISWAP_ROUTER_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("SUSHISWAP_ROUTER_ADDRESS"))
     QUICKSWAP_ROUTER_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("QUICKSWAP_ROUTER_ADDRESS"))
+    QUICKSWAP_FACTORY_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("QUICKSWAP_FACTORY_ADDRESS"))
+    SUSHISWAP_FACTORY_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("SUSHISWAP_FACTORY_ADDRESS"))
 
     # Endereços dos tokens
     USDC_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("USDC_ADDRESS"))
@@ -95,32 +97,21 @@ logger.info("Conexão com a rede Polygon estabelecida com sucesso.")
 ABIS_DIR = os.path.join(BASE_DIR, 'abis')
 
 def carregar_abi_localmente(nome_ficheiro_abi: str) -> list:
-    """
-    Carrega um ficheiro JSON de ABI do diretório 'abis'.
-    Lida tanto com artefactos do Hardhat (objetos com uma chave 'abi')
-    quanto com ficheiros que são apenas a lista do ABI.
-    """
     caminho_abi = os.path.join(ABIS_DIR, nome_ficheiro_abi)
     try:
         with open(caminho_abi, 'r') as f:
             data = json.load(f)
-            # CORREÇÃO: Verifica se o JSON é um objeto (dict) e tem a chave 'abi'
             if isinstance(data, dict) and 'abi' in data:
                 return data['abi']
-            # Se for uma lista, é o ABI diretamente
             elif isinstance(data, list):
                 return data
             else:
-                raise ValueError("Formato de ABI inválido: não é uma lista nem um objeto com a chave 'abi'.")
-    except FileNotFoundError:
-        logger.critical(f"Ficheiro ABI não encontrado: {caminho_abi}")
-        raise
-    except (json.JSONDecodeError, ValueError) as e:
-        logger.critical(f"Erro ao ler ou processar o ficheiro ABI '{nome_ficheiro_abi}': {e}")
+                raise ValueError("Formato de ABI inválido.")
+    except Exception as e:
+        logger.critical(f"Erro ao ler o ficheiro ABI '{nome_ficheiro_abi}': {e}")
         raise
 
 def carregar_contrato(abi_nome: str, endereco: str, nome_legivel: str):
-    """Carrega uma instância de contrato, garantindo o formato correto do endereço."""
     try:
         checksum_address = Web3.to_checksum_address(endereco)
         abi = carregar_abi_localmente(abi_nome)
@@ -173,7 +164,6 @@ def converter_de_unidade_base(w3: Web3, quantidade: int, token_address: str) -> 
 
 # --- 4. INSTANCIAÇÃO DE OBJETOS E CRIAÇÃO DO DICIONÁRIO DE CONFIGURAÇÃO ---
 
-# Gerenciador de Nonce
 nonce_manager = NonceManager(web3_instance, WALLET_ADDRESS)
 
 # Contratos das DEXs
@@ -184,17 +174,21 @@ dex_contracts = {
     },
     "SushiSwapV2": {
         "router": carregar_contrato("SushiswapV2Router02.json", SUSHISWAP_ROUTER_ADDRESS, "SushiSwap V2 Router"),
+        "factory": carregar_contrato("SushiswapV2Factory.json", SUSHISWAP_FACTORY_ADDRESS, "SushiSwap V2 Factory"),
+        # CORREÇÃO: Adicionar o nome do ficheiro ABI do Pair explicitamente
+        "pair_abi_name": "SushiswapV2Pair.json"
     },
     "QuickSwapV2": {
         "router": carregar_contrato("QuickswapV2Router02.json", QUICKSWAP_ROUTER_ADDRESS, "QuickSwap V2 Router"),
+        "factory": carregar_contrato("QuickswapV2Factory.json", QUICKSWAP_FACTORY_ADDRESS, "QuickSwap V2 Factory"),
+        # CORREÇÃO: Adicionar o nome do ficheiro ABI do Pair explicitamente
+        "pair_abi_name": "QuickswapV2Pair.json"
     }
 }
 
-# Contrato de Flash Loan
 flashloan_contract = carregar_contrato("FlashLoanReceiver.json", FLASHLOAN_CONTRACT_ADDRESS, "FlashLoan Receiver")
 
-
-# Dicionário de configuração final para ser importado por outros módulos
+# Dicionário de configuração final
 config = {
     "web3": web3_instance,
     "logger": logger,
@@ -204,12 +198,10 @@ config = {
     "private_key": PRIVATE_KEY,
     "flashloan_contract": flashloan_contract,
     "TOKENS": TOKENS,
-    
-    # Funções utilitárias
     "to_base": converter_para_unidade_base,
     "from_base": converter_de_unidade_base,
-    
-    # Parâmetros de execução
+    # CORREÇÃO: Expor a função de carregar ABI para outros módulos
+    "carregar_abi_localmente": carregar_abi_localmente,
     "gas_limit": 3000000,
     "min_balance_matic": Decimal(5),
 }

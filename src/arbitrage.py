@@ -1,6 +1,7 @@
 """
 Módulo para identificar e executar oportunidades de arbitragem em diferentes DEXs
 utilizando a infraestrutura de Flash Loans da Aave.
+Versão 2.0: Implementa a otimização de quantidade com base na liquidez do mercado.
 """
 
 import os
@@ -15,8 +16,12 @@ sys.path.append(base_dir)
 
 from src.flash_loan import iniciar_operacao_flash_loan
 from utils.config import config
-from utils.liquidity_utils import obter_preco_saida
+# ATUALIZAÇÃO: Importar as novas funções de liquidez e otimização
+from utils.liquidity_utils import obter_reservas_pool_v2
+from utils.optimization_utils import calcular_quantidade_otima
 from utils.wallet_manager import verificar_saldo_matic_suficiente
+# ATUALIZAÇÃO: Importar o novo oráculo de preços
+from utils.price_oracle import obter_preco_matic_em_usdc
 
 # --- Variáveis Globais do Módulo ---
 web3 = config['web3']
@@ -25,149 +30,167 @@ wallet_address = config['wallet_address']
 dex_contracts = config['dex_contracts']
 TOKENS = config['TOKENS']
 min_balance_matic = config['min_balance_matic']
+# ATUALIZAÇÃO: Taxa do Flash Loan da Aave (0.09%)
+TAXA_FLASH_LOAN = Decimal("0.0009")
 
-
-def identificar_melhor_oportunidade(token_emprestimo: str, quantidade_emprestimo: float):
+def calcular_lucro_liquido_esperado(
+    lucro_bruto_base: int,
+    quantidade_emprestimo_base: int,
+    token_emprestimo_address: str
+) -> Decimal:
     """
-    Identifica a melhor oportunidade de arbitragem entre diferentes DEXs.
+    Calcula o lucro líquido esperado de uma operação, descontando todos os custos.
+    """
+    # Converter para formato legível para os cálculos
+    lucro_bruto = config['from_base'](web3, lucro_bruto_base, token_emprestimo_address)
+    quantidade_emprestimo = config['from_base'](web3, quantidade_emprestimo_base, token_emprestimo_address)
+
+    # 1. Calcular a taxa do Flash Loan
+    custo_flash_loan = quantidade_emprestimo * TAXA_FLASH_LOAN
+
+    # 2. Estimar o custo do gás em USDC
+    preco_gas_gwei = Decimal(config['gas_utils'].obter_taxa_gas(web3, logger))
+    gas_limit = Decimal(config['gas_limit'])
+    preco_matic_usdc = obter_preco_matic_em_usdc()
+    
+    if preco_matic_usdc == 0:
+        logger.warning("Não foi possível obter o preço do MATIC. O cálculo do custo do gás será impreciso.")
+        custo_gas_usdc = Decimal("inf") # Impede a execução se o preço do gás for desconhecido
+    else:
+        custo_gas_matic = web3.from_wei(int(gas_limit * preco_gas_gwei), 'gwei')
+        custo_gas_usdc = custo_gas_matic * preco_matic_usdc
+
+    # 3. Calcular o Lucro Líquido
+    lucro_liquido = lucro_bruto - custo_flash_loan - custo_gas_usdc
+    
+    logger.debug(f"Cálculo de Lucro: Bruto={lucro_bruto:.4f}, Custo FlashLoan={custo_flash_loan:.4f}, Custo Gás={custo_gas_usdc:.4f} -> Líquido={lucro_liquido:.4f}")
+
+    return lucro_liquido
+
+
+def identificar_melhor_oportunidade(token_emprestimo: str):
+    """
+    Identifica a melhor oportunidade de arbitragem, calculando a quantidade ótima
+    e o lucro líquido esperado para cada par.
     """
     melhor_oportunidade = None
-    # CORREÇÃO 1: Iniciar com um número infinitamente pequeno para garantir
-    # que qualquer oportunidade encontrada seja considerada a "melhor" no início.
-    melhor_lucro_bruto = -float('inf')
+    melhor_lucro_liquido = Decimal(0)
 
+    # Itera sobre todos os tokens para encontrar um para arbitrar
     for token_alvo_info in TOKENS.values():
         if token_alvo_info['address'] == token_emprestimo:
             continue
-        
         token_alvo = token_alvo_info['address']
 
-        for dex_compra_nome in dex_contracts:
-            for dex_venda_nome in dex_contracts:
+        # Itera sobre todas as combinações de DEXs V2
+        dexs_v2 = [dex for dex in dex_contracts if "V2" in dex]
+        for dex_compra_nome in dexs_v2:
+            for dex_venda_nome in dexs_v2:
                 if dex_compra_nome == dex_venda_nome:
                     continue
 
                 try:
-                    quantidade_base_emprestimo = config['to_base'](web3, quantidade_emprestimo, token_emprestimo)
-                    
-                    quantidade_recebida_base = obter_preco_saida(
-                        dex_compra_nome, token_emprestimo, token_alvo, quantidade_base_emprestimo
-                    )
+                    # 1. Obter as reservas de liquidez de ambos os pools
+                    reservas_compra = obter_reservas_pool_v2(dex_compra_nome, token_emprestimo, token_alvo)
+                    reservas_venda = obter_reservas_pool_v2(dex_venda_nome, token_emprestimo, token_alvo)
 
-                    if quantidade_recebida_base == 0:
+                    if not reservas_compra or not reservas_venda:
                         continue
 
-                    quantidade_final_base = obter_preco_saida(
-                        dex_venda_nome, token_alvo, token_emprestimo, quantidade_recebida_base
+                    # 2. Calcular a quantidade ótima para a arbitragem
+                    # (reserva_token_emprestimo, reserva_token_alvo)
+                    quantidade_otima_base = calcular_quantidade_otima(
+                        reservas_compra[0], reservas_compra[1], # Pool de Compra
+                        reservas_venda[1], reservas_venda[0]  # Pool de Venda (ordem invertida)
                     )
 
-                    lucro_bruto_base = quantidade_final_base - quantidade_base_emprestimo
-                    
-                    # CORREÇÃO 2: Remover a verificação 'lucro_bruto_base > 0'
-                    # para que o bot execute a transação mesmo sem lucro.
-                    if lucro_bruto_base > melhor_lucro_bruto and lucro_bruto_base > 0:
-                        melhor_lucro_bruto = lucro_bruto_base
-                        lucro_bruto_estimado_decimal = config['from_base'](web3, lucro_bruto_base, token_emprestimo)
-                        
-                        token_symbol = next((key for key, value in TOKENS.items() if value['address'] == token_emprestimo), "TOKEN")
+                    if quantidade_otima_base == 0:
+                        continue
 
+                    # 3. Simular a transação com a quantidade ótima para obter o lucro bruto
+                    # Swap 1: token_emprestimo -> token_alvo
+                    amount_out_swap1 = config['liquidity_utils'].obter_preco_saida(dex_compra_nome, token_emprestimo, token_alvo, quantidade_otima_base)
+                    # Swap 2: token_alvo -> token_emprestimo
+                    amount_out_swap2 = config['liquidity_utils'].obter_preco_saida(dex_venda_nome, token_alvo, token_emprestimo, amount_out_swap1)
+                    
+                    lucro_bruto_base = amount_out_swap2 - quantidade_otima_base
+
+                    if lucro_bruto_base <= 0:
+                        continue
+
+                    # 4. Calcular o lucro líquido, descontando todos os custos
+                    lucro_liquido = calcular_lucro_liquido_esperado(lucro_bruto_base, quantidade_otima_base, token_emprestimo)
+
+                    if lucro_liquido > melhor_lucro_liquido:
+                        melhor_lucro_liquido = lucro_liquido
                         melhor_oportunidade = {
                             "token_alvo": token_alvo,
                             "dex_compra": dex_contracts[dex_compra_nome]['router'].address,
                             "dex_venda": dex_contracts[dex_venda_nome]['router'].address,
-                            "lucro_bruto_estimado": lucro_bruto_estimado_decimal,
-                            "dex_compra_nome": dex_compra_nome,
-                            "dex_venda_nome": dex_venda_nome
+                            "quantidade_emprestimo": config['from_base'](web3, quantidade_otima_base, token_emprestimo),
+                            "lucro_liquido_estimado": lucro_liquido
                         }
-                        logger.info(f"Nova oportunidade (não lucrativa) encontrada: {lucro_bruto_estimado_decimal:.6f} {token_symbol.upper()}.")
+                        logger.info(f"Nova oportunidade encontrada! Lucro líquido estimado: {lucro_liquido:.4f} USDC.")
 
                 except Exception as e:
-                    logger.debug(f"Erro ao verificar par {token_emprestimo[-4:]}/{token_alvo[-4:]} em {dex_compra_nome}/{dex_venda_nome}: {e}")
+                    logger.debug(f"Erro ao analisar oportunidade: {e}", exc_info=True)
                     continue
     
     if melhor_oportunidade:
-        logger.info(f"Melhor oportunidade de teste selecionada (Lucro: {melhor_oportunidade['lucro_bruto_estimado']:.6f}). A executar...")
+        logger.info(f"Melhor oportunidade selecionada: Lucro de {melhor_oportunidade['lucro_liquido_estimado']:.4f} USDC.")
     
     return melhor_oportunidade
 
 
-def executar_arbitragem_com_flashloan(oportunidade: dict, token_emprestimo: str, quantidade_emprestimo: float):
+def executar_arbitragem_com_flashloan(oportunidade: dict):
     """
-    Executa a operação de arbitragem com flash loan.
+    Executa a operação de arbitragem com a quantidade de empréstimo otimizada.
     """
     try:
-        saldo_inicial = config['web3'].eth.get_balance(wallet_address)
-        logger.info(f"Saldo inicial de MATIC: {web3.from_wei(saldo_inicial, 'ether')}")
+        token_emprestimo = config['TOKENS']['usdc']['address'] # Assumindo que o empréstimo é em USDC
+        quantidade_emprestimo = oportunidade['quantidade_emprestimo']
 
-        token_alvo = oportunidade['token_alvo']
-        dex_compra = oportunidade['dex_compra']
-        dex_venda = oportunidade['dex_venda']
-
+        logger.info(f"Executando arbitragem com {quantidade_emprestimo:.4f} USDC...")
+        
         params_codificados = encode(
             ['address', 'address', 'address'],
-            [token_alvo, dex_compra, dex_venda]
+            [oportunidade['token_alvo'], oportunidade['dex_compra'], oportunidade['dex_venda']]
         )
-
-        logger.info("Iniciando a transação de flash loan e arbitragem...")
         
         receipt = iniciar_operacao_flash_loan(
             token_a_emprestar=token_emprestimo,
-            quantidade_a_emprestar=quantidade_emprestimo,
+            quantidade_a_emprestar=float(quantidade_emprestimo),
             params_codificados=params_codificados
         )
 
         if receipt and receipt['status'] == 1:
             logger.info("Transação de arbitragem executada com sucesso!")
-            saldo_final = config['web3'].eth.get_balance(wallet_address)
-            verificar_lucro_apos_arbitragem(saldo_inicial, saldo_final, receipt)
         else:
-            logger.error("A transação de arbitragem falhou.")
+            logger.error("A transação de arbitragem falhou (revertida pelo contrato).")
 
     except Exception as e:
-        logger.critical(f"Erro crítico na execução da arbitragem: {e}")
-
-def verificar_lucro_apos_arbitragem(saldo_inicial_wei, saldo_final_wei, receipt):
-    """Calcula e verifica o lucro da operação em MATIC (gás)."""
-    if not receipt:
-        logger.error("Não foi possível verificar o lucro pois o recibo da transação é inválido.")
-        return
-
-    custo_gas_wei = receipt.get('gasUsed', 0) * receipt.get('effectiveGasPrice', 0)
-    lucro_liquido_wei = (saldo_final_wei - saldo_inicial_wei)
-    
-    lucro_matic = web3.from_wei(lucro_liquido_wei, 'ether')
-    custo_gas_matic = web3.from_wei(custo_gas_wei, 'ether')
-
-    logger.info(f"Custo da transação (gás): {custo_gas_matic:.8f} MATIC")
-    if lucro_matic > 0:
-        logger.info(f"Lucro líquido obtido (refletido no saldo de MATIC): {lucro_matic:.8f} MATIC 🎉")
-    else:
-        logger.warning(f"Prejuízo na operação (refletido no saldo de MATIC): {lucro_matic:.8f} MATIC")
+        logger.critical(f"Erro crítico na execução da arbitragem: {e}", exc_info=True)
 
 
 def iniciar_bot_arbitragem(stop_event):
     """Inicia o bot de arbitragem em loop contínuo."""
     TOKEN_EMPRESTIMO = TOKENS['usdc']['address']
-    QUANTIDADE_EMPRESTIMO = 35000.0
 
-    logger.info("Bot de Arbitragem ZEUS iniciado.")
-    logger.info(f"A procurar oportunidades com {QUANTIDADE_EMPRESTIMO} USDC.")
+    logger.info("Bot de Arbitragem ZEUS v2.0 (Otimizado) iniciado.")
 
     while not stop_event.is_set():
         try:
             if not verificar_saldo_matic_suficiente(web3, wallet_address, min_balance_matic):
-                time.sleep(300) # Pausa por 5 minutos se o saldo for baixo
+                time.sleep(300)
                 continue
 
-            logger.info("Procurando nova oportunidade de arbitragem...")
-            melhor_oportunidade = identificar_melhor_oportunidade(TOKEN_EMPRESTIMO, QUANTIDADE_EMPRESTIMO)
+            logger.info("Procurando nova oportunidade de arbitragem otimizada...")
+            melhor_oportunidade = identificar_melhor_oportunidade(TOKEN_EMPRESTIMO)
             
             if melhor_oportunidade:
-                # Com as correções, este bloco será agora executado
-                executar_arbitragem_com_flashloan(melhor_oportunidade, TOKEN_EMPRESTIMO, QUANTIDADE_EMPRESTIMO)
+                executar_arbitragem_com_flashloan(melhor_oportunidade)
             else:
-                # Esta mensagem não deverá aparecer durante o teste forçado
-                logger.info("Nenhuma oportunidade encontrada no momento.")
+                logger.info("Nenhuma oportunidade lucrativa encontrada no momento.")
 
         except Exception as e:
             logger.error(f"Erro no loop principal do bot: {e}", exc_info=True)
