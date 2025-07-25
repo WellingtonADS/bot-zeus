@@ -14,6 +14,7 @@ venv/
 ENV/
 env/
 .venv/
+.envbkp
 
 # Byte-compiled / optimized / DLL files
 *.pyc
