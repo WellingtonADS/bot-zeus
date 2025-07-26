@@ -1,122 +1,117 @@
-# Bot-ZEUS
+# Bot ZEUS - v2.0
 
-Bot-ZEUS é um bot de arbitragem de criptomoedas projetado para identificar e explorar oportunidades de arbitragem em várias exchanges descentralizadas (DEXs) na rede Polygon. Ele utiliza flash loans para maximizar o potencial de lucro, emprestando e devolvendo fundos em uma única transação.
+## Visão Geral
 
-## Funcionalidades
+O Bot ZEUS é um sistema de software para a automação de estratégias de arbitragem na blockchain Polygon. O seu objetivo é a identificação e execução de discrepâncias de preço para um mesmo ativo criptográfico entre múltiplas corretoras descentralizadas (DEXs).
 
-- **Arbitragem Automatizada**: Identifica e executa oportunidades de arbitragem em tempo real.
-- **Flash Loans**: Utiliza flash loans da AAVE para realizar arbitragem sem necessidade de capital inicial.
-- **Verificação de Liquidez**: Assegura que há liquidez suficiente nas DEXs antes de executar qualquer operação.
-- **Gestão de Saldo**: Monitora e mantém um saldo mínimo de MATIC na carteira para cobrir taxas de transação.
+Para capitalizar estas oportunidades, o sistema utiliza **Flash Loans** do protocolo Aave V3, permitindo a utilização de um capital de operação elevado sem a necessidade de fundos próprios. Esta versão implementa uma lógica avançada que **calcula dinamicamente o volume ótimo** de cada operação com base na liquidez disponível no mercado em tempo real.
+
+## Funcionalidades Principais
+
+* **Arbitragem Multi-DEX:** Monitoriza continuamente os preços em várias DEXs (Uniswap V3, Sushiswap V2, Quickswap V2) para encontrar oportunidades de arbitragem.
+* **Otimização Dinâmica de Liquidez:** Em vez de usar um valor fixo, o bot analisa a profundidade dos pools de liquidez para calcular o tamanho ideal de cada transação, maximizando o lucro e minimizando o impacto no preço (*slippage*).
+* **Cálculo de Lucratividade Líquida:** Antes de executar qualquer transação, o sistema simula a operação completa e subtrai todos os custos (taxa do Flash Loan, taxas de negociação das DEXs e o custo do gás da transação) para garantir que apenas operações genuinamente lucrativas sejam executadas.
+* **Execução Atómica com Flash Loans:** Utiliza um contrato inteligente (`FlashLoanReceiver.sol`) para receber um empréstimo da Aave, executar os dois swaps da arbitragem e devolver o empréstimo, tudo numa única e indivisível transação na blockchain.
+* **Gestão de Carteira:** Monitoriza o saldo de MATIC da carteira operacional para garantir que há sempre fundos suficientes para as taxas de gás.
+
+## Como Funciona
+
+O sistema é dividido em duas componentes que trabalham em harmonia:
+
+1.  **Bot Off-Chain (Python):** O "cérebro" que corre localmente. Ele analisa os dados da blockchain, identifica oportunidades, calcula a estratégia ótima (quantidade e lucro) e envia a ordem de execução.
+2.  **Contrato Inteligente On-Chain (Solidity):** O "ator" que vive na blockchain. Ele recebe a ordem do bot, pede o Flash Loan, executa os swaps de forma atómica e segura, paga o empréstimo e transfere o lucro para a carteira do operador.
 
 ## Estrutura do Projeto
 
-```plaintext
-/projeto
-│
-├── /contracts
-│   ├── AToken.json                         # ABI do token AAVE
-│   ├── dex_contracts.json                  # Arquivo JSON contendo informações sobre contratos de DEXs
-│   ├── LendingPool.json                    # ABI do LendingPool da AAVE
-│   ├── LendingPoolAddressesProvider.json   # ABI do endereço do provedor de pool de endereços da AAVE
-│   ├── LendingPoolCore.json                # ABI do núcleo do LendingPool da AAVE
-│   ├── quickswap_router_abi.json           # ABI do roteador da QuickSwap
-│   ├── sushiswap_router_abi.json           # ABI do roteador da SushiSwap
-│   ├── tokens.json                         # Lista de tokens com endereços na rede Polygon
-│   ├── uniswap_router_abi.json             # ABI do roteador da Uniswap
-│
-├── /node_modules                           # Diretório para dependências do Node.js
-│
-├── /src
-│   ├── arbitrage.py                        # Lógica de arbitragem, incluindo identificação e execução
-│   ├── bot_main.py                         # Ponto de entrada principal do bot de arbitragem
-│   ├── dex_operations.py                   # Operações relacionadas às DEXs, como comprar e vender tokens
-│   ├── flash_loan.py                       # Funções relacionadas aos flash loans da AAVE
-│
-├── /test
-│   ├── test_contract_function.py           # Testes de funções de contratos
-│   ├── test_simulacao_liquidez.py          # Testes de simulação de liquidez
-│   ├── teste_gas.py                        # Testes de taxas de gás
-│   ├── teste_saldo.py                      # Testes de saldo
-│   ├── verificar_conexao.py                # Verificação de conexão com a rede
-│
-├── /utils
-│   ├── gas_utils.py                        # Funções para obter a taxa de gás
-│   ├── liquidity_utils.py                  # Funções para obter a liquidez disponível e calcular a quantidade ideal de tokens
-│   ├── price_utils.py                      # Funções para obter preços dos tokens nas DEXs
-│
-├── .env                                    # Arquivo de variáveis de ambiente contendo informações sensíveis
-├── .gitignore                              # Arquivo para excluir arquivos e diretórios do controle de versão
-├── package-lock.json                       # Arquivo de bloqueio de dependências do Node.js
-├── package.json                            # Arquivo de dependências do Node.js
-├── rascunho.txt                            # Provavelmente um arquivo de rascunho
-└── requirements.txt                        # Arquivo de dependências do Python
-
 ```
 
-## Instalação
+/bot-zeus
+│
+├── /abis/              \# ABIs dos contratos para interação
+├── /contracts/         \# Código fonte dos contratos inteligentes (.sol)
+├── /logs/              \# Ficheiros de log gerados pelo bot
+├── /src/               \# Código fonte principal do bot (Python)
+│   ├── arbitrage.py
+│   ├── bot\_main.py
+│   ├── flash\_loan.py
+│   └── dex\_operations.py
+│
+├── /utils/             \# Módulos de utilidades (Python)
+│   ├── config.py
+│   ├── gas\_utils.py
+│   ├── liquidity\_utils.py
+│   ├── nonce\_utils.py
+│   ├── optimization\_utils.py
+│   ├── price\_oracle.py
+│   └── wallet\_manager.py
+│
+├── .env                \# Ficheiro de variáveis de ambiente (NÃO versionar)
+├── .gitignore
+├── deploy.py           \# Script para implantar o contrato inteligente
+├── hardhat.config.js   \# Ficheiro de configuração do Hardhat
+├── package.json        \# Dependências de desenvolvimento (Node.js)
+└── requirements.txt    \# Dependências do bot (Python)
 
-1. Clone o repositório:
+````
 
+## Instalação e Configuração
+
+**Pré-requisitos:**
+
+* [Node.js](https://nodejs.org/) (versão LTS recomendada)
+* [Python](https://www.python.org/) (versão 3.10 ou superior)
+* [Yarn](https://yarnpkg.com/) (instalado via `npm install -g yarn`)
+
+**Passos:**
+
+1.  **Clone o repositório:**
     ```bash
-    git clone https://github.com/seu-usuario/bot-zeus.git
+    git clone [https://github.com/WellingtonADS/bot-zeus.git](https://github.com/WellingtonADS/bot-zeus.git)
     cd bot-zeus
     ```
-
-2. Crie um ambiente virtual e ative-o:
-
+2.  **Instale as dependências de desenvolvimento (Hardhat):**
     ```bash
-    python -m venv venv
-    source venv/bin/activate  # No Windows use `venv\Scripts\activate`
+    yarn install
     ```
-
-3. Instale as dependências:
-
+3.  **Crie e ative um ambiente virtual Python:**
+    ```bash
+    python -m venv .venv
+    # No Windows (PowerShell):
+    .\.venv\Scripts\Activate.ps1
+    # No macOS/Linux:
+    # source .venv/bin/activate
+    ```
+4.  **Instale as dependências Python:**
     ```bash
     pip install -r requirements.txt
     ```
-
-4. Configure suas variáveis de ambiente. Crie um arquivo `.env` com base no `.env.example` e preencha os valores necessários.
+5.  **Configure as Variáveis de Ambiente:**
+    * Crie uma cópia do ficheiro `.env.example` (se existir) ou crie um novo ficheiro chamado `.env`.
+    * Preencha todas as variáveis necessárias: `INFURA_URL`, `WALLET_ADDRESS`, `PRIVATE_KEY`, e os endereços dos contratos das DEXs e dos tokens.
 
 ## Uso
 
-1. Inicie o bot de arbitragem:
+O processo de execução é dividido em duas etapas principais:
 
-    ```bash
-    python src/bot_main.py
-    ```
-
-## Estrutura dos Arquivos
-
-### /contracts
-
-Contém os arquivos ABI necessários para interagir com os contratos inteligentes na rede Polygon.
-
-### /src
-
-Código fonte principal do bot de arbitragem:
-
-- **arbitrage.py**: Lógica de arbitragem.
-- **bot_main.py**: Ponto de entrada principal do bot.
-- **dex_operations.py**: Operações relacionadas às DEXs.
-- **flash_loan.py**: Funções relacionadas aos flash loans.
-
-### /test
-
-Scripts de teste para verificar a funcionalidade do bot.
-
-### /utils
-
-Funções utilitárias para obter taxas de gás, liquidez e preços.
-
-## Contribuição
-
-Contribuições são bem-vindas! Sinta-se à vontade para abrir issues e pull requests no repositório GitHub.
+1.  **Compilar e Implantar o Contrato Inteligente:**
+    * Primeiro, compile o contrato:
+        ```bash
+        yarn hardhat compile
+        ```
+    * Copie o ficheiro `FlashLoanReceiver.json` gerado em `artifacts/contracts/` para a sua pasta `abis/`.
+    * Execute o script de implantação. Isto irá colocar o seu contrato na blockchain e imprimir o seu endereço.
+        ```bash
+        python deploy.py
+        ```
+2.  **Iniciar o Bot:**
+    * Depois de o contrato ser implantado, copie o seu endereço e cole-o na variável `FLASHLOAN_CONTRACT_ADDRESS` no seu ficheiro `.env`.
+    * Execute o bot:
+        ```bash
+        python src/bot_main.py
+        ```
+    * Na interface de comando, digite `start` para iniciar a busca por oportunidades.
 
 ## Licença
 
-Este projeto está licenciado sob a Licença MIT. Veja o arquivo `LICENSE` para mais detalhes.
-
-## Agradecimentos
-
-Agradecemos à comunidade de desenvolvedores de blockchain e arbitragem por suas contribuições e suporte contínuos.
+Este projeto está licenciado sob a Licença MIT. Veja o ficheiro `LICENSE` para mais detalhes.
+````
