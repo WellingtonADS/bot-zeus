@@ -1,7 +1,9 @@
 require("@nomiclabs/hardhat-waffle");
+require("@nomiclabs/hardhat-ethers");
 require("dotenv").config();
 
 module.exports = {
+  defaultNetwork: "hardhat",
   solidity: {
     compilers: [
       {
@@ -11,6 +13,7 @@ module.exports = {
             enabled: true,
             runs: 200,
           },
+          viaIR: true,
         },
       },
       {
@@ -20,6 +23,8 @@ module.exports = {
             enabled: true,
             runs: 200,
           },
+          // viaIR opcional para 0.8.0 caso encontre "stack too deep" em contratos antigos
+          // viaIR: true,
         },
       },
       {
@@ -41,9 +46,26 @@ module.exports = {
     artifacts: "./artifacts",
   },
   networks: {
+    hardhat: {
+      chainId: 31337,
+      // Ative o forking para testes realistas contra o estado da mainnet
+      forking: process.env.FORK_RPC_URL
+        ? {
+            url: process.env.FORK_RPC_URL,
+          }
+        : undefined,
+    },
     polygon: {
       url: process.env.INFURA_URL,
       accounts: [process.env.PRIVATE_KEY],
     },
+  },
+  etherscan: {
+    apiKey: {
+      polygon: process.env.POLYGONSCAN_API_KEY || "",
+    },
+  },
+  mocha: {
+    timeout: 60000,
   },
 };

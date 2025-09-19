@@ -56,11 +56,27 @@ def obter_variavel_ambiente(nome_variavel: str) -> str:
         raise ValueError(f"'{nome_variavel}' não está definida.")
     return valor
 
+def obter_variavel_ambiente_opcional(nome_variavel: str) -> str | None:
+    """Obtém uma variável de ambiente opcional; retorna None se ausente."""
+    valor = os.getenv(nome_variavel)
+    if not valor:
+        logger.warning(f"Variável de ambiente opcional '{nome_variavel}' não definida. Será tentada a inferência automática quando possível.")
+        return None
+    return valor
+
 try:
     # Configurações da carteira e do provedor
     WALLET_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("WALLET_ADDRESS"))
     PRIVATE_KEY = obter_variavel_ambiente("PRIVATE_KEY")
-    PROVIDER_URL = obter_variavel_ambiente("INFURA_URL")
+    # Provedores RPC: suporte a múltiplos via fallback
+    # Ordem de preferência: INFURA_URL -> RPC_URL -> FORK_RPC_URL -> LOCAL_RPC_URL -> http://127.0.0.1:8545
+    PROVIDER_CANDIDATES = [
+        os.getenv("INFURA_URL"),
+        os.getenv("RPC_URL"),
+        os.getenv("FORK_RPC_URL"),
+        os.getenv("LOCAL_RPC_URL"),
+        "http://127.0.0.1:8545",
+    ]
 
     # Endereços dos contratos
     FLASHLOAN_CONTRACT_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("FLASHLOAN_CONTRACT_ADDRESS"))
@@ -68,8 +84,11 @@ try:
     QUOTER_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("QUOTER_ADDRESS"))
     SUSHISWAP_ROUTER_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("SUSHISWAP_ROUTER_ADDRESS"))
     QUICKSWAP_ROUTER_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("QUICKSWAP_ROUTER_ADDRESS"))
-    QUICKSWAP_FACTORY_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("QUICKSWAP_FACTORY_ADDRESS"))
-    SUSHISWAP_FACTORY_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("SUSHISWAP_FACTORY_ADDRESS"))
+    # Factories V2: agora opcionais; se ausentes, serão inferidas via router.factory()
+    _qf = obter_variavel_ambiente_opcional("QUICKSWAP_FACTORY_ADDRESS")
+    QUICKSWAP_FACTORY_ADDRESS = Web3.to_checksum_address(_qf) if _qf else None
+    _sf = obter_variavel_ambiente_opcional("SUSHISWAP_FACTORY_ADDRESS")
+    SUSHISWAP_FACTORY_ADDRESS = Web3.to_checksum_address(_sf) if _sf else None
 
     # Endereços dos tokens
     USDC_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("USDC_ADDRESS"))
@@ -83,13 +102,29 @@ except ValueError as e:
     sys.exit(1)
 
 # Instância Web3
-web3_instance = Web3(Web3.HTTPProvider(PROVIDER_URL))
-web3_instance.middleware_onion.inject(geth_poa_middleware, layer=0)
+last_err = None
+web3_instance = None
+chosen_url = None
+for candidate in [url for url in PROVIDER_CANDIDATES if url]:
+    try:
+        w3 = Web3(Web3.HTTPProvider(candidate))
+        w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+        if w3.is_connected():
+            web3_instance = w3
+            chosen_url = candidate
+            break
+        else:
+            last_err = RuntimeError(f"Não conectou em {candidate}")
+    except Exception as e:
+        last_err = e
 
-if not web3_instance.is_connected():
-    logger.critical("Falha na conexão com o nó da Polygon.")
+if web3_instance is None:
+    logger.critical("Falha na conexão com o nó da Polygon. Verifique sua variável INFURA_URL/RPC_URL ou inicialize seu nó local.")
+    if last_err:
+        logger.critical(f"Último erro: {last_err}")
     raise ConnectionError("Não foi possível conectar à rede Polygon.")
-logger.info("Conexão com a rede Polygon estabelecida com sucesso.")
+
+logger.info(f"Conexão com a rede Polygon estabelecida com sucesso. URL: {chosen_url}")
 
 
 # --- 3. FUNÇÕES UTILITÁRIAS E CARREGAMENTO DE CONTRATOS ---
@@ -113,6 +148,8 @@ def carregar_abi_localmente(nome_ficheiro_abi: str) -> list:
 
 def carregar_contrato(abi_nome: str, endereco: str, nome_legivel: str):
     try:
+        if web3_instance is None:
+            raise RuntimeError("web3_instance não foi inicializado (sem conexão RPC).")
         checksum_address = Web3.to_checksum_address(endereco)
         abi = carregar_abi_localmente(abi_nome)
         contrato = web3_instance.eth.contract(address=checksum_address, abi=abi)
@@ -167,20 +204,49 @@ def converter_de_unidade_base(w3: Web3, quantidade: int, token_address: str) -> 
 nonce_manager = NonceManager(web3_instance, WALLET_ADDRESS)
 
 # Contratos das DEXs
+uniswap_v3_router = carregar_contrato("ISwapRouter.json", UNISWAP_V3_ROUTER_ADDRESS, "Uniswap V3 Router")
+uniswap_v3_quoter = carregar_contrato("IQuoter.json", QUOTER_ADDRESS, "Uniswap V3 Quoter")
+
+# Routers V2
+sushiswap_router = carregar_contrato("SushiswapV2Router02.json", SUSHISWAP_ROUTER_ADDRESS, "SushiSwap V2 Router")
+quickswap_router = carregar_contrato("QuickswapV2Router02.json", QUICKSWAP_ROUTER_ADDRESS, "QuickSwap V2 Router")
+
+# Tentar inferir as factories via router.factory() caso não venham do .env
+if SUSHISWAP_FACTORY_ADDRESS is None:
+    try:
+        inferred = sushiswap_router.functions.factory().call()
+        SUSHISWAP_FACTORY_ADDRESS = Web3.to_checksum_address(inferred)
+        logger.info(f"SushiSwap V2 Factory inferida via router: {SUSHISWAP_FACTORY_ADDRESS}")
+    except Exception as e:
+        logger.critical(f"Não foi possível inferir a SushiSwap V2 Factory via router. Defina SUSHISWAP_FACTORY_ADDRESS no .env. Erro: {e}")
+        raise
+
+if QUICKSWAP_FACTORY_ADDRESS is None:
+    try:
+        inferred = quickswap_router.functions.factory().call()
+        QUICKSWAP_FACTORY_ADDRESS = Web3.to_checksum_address(inferred)
+        logger.info(f"QuickSwap V2 Factory inferida via router: {QUICKSWAP_FACTORY_ADDRESS}")
+    except Exception as e:
+        logger.critical(f"Não foi possível inferir a QuickSwap V2 Factory via router. Defina QUICKSWAP_FACTORY_ADDRESS no .env. Erro: {e}")
+        raise
+
+sushiswap_factory = carregar_contrato("SushiswapV2Factory.json", SUSHISWAP_FACTORY_ADDRESS, "SushiSwap V2 Factory")
+quickswap_factory = carregar_contrato("QuickswapV2Factory.json", QUICKSWAP_FACTORY_ADDRESS, "QuickSwap V2 Factory")
+
 dex_contracts = {
     "UniswapV3": {
-        "router": carregar_contrato("ISwapRouter.json", UNISWAP_V3_ROUTER_ADDRESS, "Uniswap V3 Router"),
-        "quoter": carregar_contrato("IQuoter.json", QUOTER_ADDRESS, "Uniswap V3 Quoter"),
+        "router": uniswap_v3_router,
+        "quoter": uniswap_v3_quoter,
     },
     "SushiSwapV2": {
-        "router": carregar_contrato("SushiswapV2Router02.json", SUSHISWAP_ROUTER_ADDRESS, "SushiSwap V2 Router"),
-        "factory": carregar_contrato("SushiswapV2Factory.json", SUSHISWAP_FACTORY_ADDRESS, "SushiSwap V2 Factory"),
+        "router": sushiswap_router,
+        "factory": sushiswap_factory,
         # CORREÇÃO: Adicionar o nome do ficheiro ABI do Pair explicitamente
         "pair_abi_name": "SushiswapV2Pair.json"
     },
     "QuickSwapV2": {
-        "router": carregar_contrato("QuickswapV2Router02.json", QUICKSWAP_ROUTER_ADDRESS, "QuickSwap V2 Router"),
-        "factory": carregar_contrato("QuickswapV2Factory.json", QUICKSWAP_FACTORY_ADDRESS, "QuickSwap V2 Factory"),
+        "router": quickswap_router,
+        "factory": quickswap_factory,
         # CORREÇÃO: Adicionar o nome do ficheiro ABI do Pair explicitamente
         "pair_abi_name": "QuickswapV2Pair.json"
     }
@@ -202,6 +268,13 @@ config = {
     "from_base": converter_de_unidade_base,
     # CORREÇÃO: Expor a função de carregar ABI para outros módulos
     "carregar_abi_localmente": carregar_abi_localmente,
-    "gas_limit": 3000000,
-    "min_balance_matic": Decimal(5),
+    # Parâmetros operacionais configuráveis via .env
+    # GAS_LIMIT: inteiro, limite de gás por transação
+    # MIN_BALANCE_MATIC: decimal, saldo mínimo de MATIC exigido
+    # SLIPPAGE_BPS: basis points (1% = 100 bps)
+    # DEADLINE_SECONDS: segundos adicionados ao timestamp atual para expirar swaps
+    "gas_limit": int(os.getenv("GAS_LIMIT", "3000000")),
+    "min_balance_matic": Decimal(os.getenv("MIN_BALANCE_MATIC", "5")),
+    "slippage_bps": int(os.getenv("SLIPPAGE_BPS", "50")),
+    "deadline_seconds": int(os.getenv("DEADLINE_SECONDS", "120")),
 }

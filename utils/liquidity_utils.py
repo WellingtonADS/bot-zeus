@@ -72,11 +72,20 @@ def obter_preco_saida(dex_nome: str, token_in_address: str, token_out_address: s
         # Lógica para Roteadores V3 (Uniswap V3)
         if dex_nome == "UniswapV3":
             quoter_contract = config['dex_contracts']['UniswapV3']['quoter']
-            fee = 3000 # A taxa do pool (0.3%) é a mais comum
-            
-            return quoter_contract.functions.quoteExactInputSingle(
-                token_in, token_out, fee, quantidade_base_in, 0
-            ).call()
+            # Considerar múltiplos fee tiers e escolher o maior retorno disponível
+            fees = [100, 500, 3000, 10000]
+            melhor = 0
+            for fee in fees:
+                try:
+                    out = quoter_contract.functions.quoteExactInputSingle(
+                        token_in, token_out, fee, quantidade_base_in, 0
+                    ).call()
+                    if out > melhor:
+                        melhor = out
+                except Exception as e:
+                    # Ignorar erros de pools inexistentes neste fee tier
+                    continue
+            return melhor
 
         # Lógica para Roteadores V2 (Sushiswap, Quickswap)
         elif dex_nome in ["SushiSwapV2", "QuickSwapV2"]:

@@ -61,22 +61,29 @@ contract FlashLoanReceiver is IFlashLoanReceiver, Ownable {
         require(msg.sender == address(POOL), "FlashLoanReceiver: Caller is not the Aave Pool");
         require(assets.length == 1, "FlashLoanReceiver: Apenas um ativo por vez.");
 
-        (address tokenAlvo, address dexCompra, address dexVenda) = abi.decode(
+        (
+            address tokenAlvo,
+            address dexCompra,
+            address dexVenda,
+            uint256 amountOutMin1,
+            uint256 amountOutMin2,
+            uint256 deadline
+        ) = abi.decode(
             params,
-            (address, address, address)
+            (address, address, address, uint256, uint256, uint256)
         );
 
         address tokenEmprestado = assets[0];
         uint256 quantidadeEmprestada = amounts[0];
 
-        IERC20(tokenEmprestado).approve(dexCompra, quantidadeEmprestada);
-        _executeSwap(dexCompra, tokenEmprestado, tokenAlvo, quantidadeEmprestada);
+    IERC20(tokenEmprestado).approve(dexCompra, quantidadeEmprestada);
+    _executeSwap(dexCompra, tokenEmprestado, tokenAlvo, quantidadeEmprestada, amountOutMin1, deadline);
 
         uint256 saldoTokenAlvo = IERC20(tokenAlvo).balanceOf(address(this));
         require(saldoTokenAlvo > 0, "FlashLoanReceiver: Compra do token alvo falhou.");
 
-        IERC20(tokenAlvo).approve(dexVenda, saldoTokenAlvo);
-        _executeSwap(dexVenda, tokenAlvo, tokenEmprestado, saldoTokenAlvo);
+    IERC20(tokenAlvo).approve(dexVenda, saldoTokenAlvo);
+    _executeSwap(dexVenda, tokenAlvo, tokenEmprestado, saldoTokenAlvo, amountOutMin2, deadline);
 
         uint256 valorADevolver = quantidadeEmprestada + premiums[0];
         uint256 saldoFinalTokenEmprestado = IERC20(tokenEmprestado).balanceOf(address(this));
@@ -96,16 +103,23 @@ contract FlashLoanReceiver is IFlashLoanReceiver, Ownable {
         return true;
     }
 
-    function _executeSwap(address dexRouter, address tokenIn, address tokenOut, uint256 amountIn) internal {
+    function _executeSwap(
+        address dexRouter,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOutMinimum,
+        uint256 deadline
+    ) internal {
         try ISwapRouter(dexRouter).exactInputSingle(
             ISwapRouter.ExactInputSingleParams({
                 tokenIn: tokenIn,
                 tokenOut: tokenOut,
                 fee: 3000,
                 recipient: address(this),
-                deadline: block.timestamp,
+                deadline: deadline,
                 amountIn: amountIn,
-                amountOutMinimum: 0,
+                amountOutMinimum: amountOutMinimum,
                 sqrtPriceLimitX96: 0
             })
         ) {
@@ -113,10 +127,10 @@ contract FlashLoanReceiver is IFlashLoanReceiver, Ownable {
         } catch {
             try IUniswapV2Router(dexRouter).swapExactTokensForTokens(
                 amountIn,
-                0,
+                amountOutMinimum,
                 _getPathFor(tokenIn, tokenOut),
                 address(this),
-                block.timestamp
+                deadline
             ) {
                 return;
             } catch {

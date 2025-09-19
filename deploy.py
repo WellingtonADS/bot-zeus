@@ -2,6 +2,7 @@ import json
 import os
 import sys
 from web3 import Web3
+from web3.middleware.geth_poa import geth_poa_middleware
 from dotenv import load_dotenv
 import logging
 
@@ -32,6 +33,8 @@ try:
     w3 = Web3(Web3.HTTPProvider(provider_url))
     if not w3.is_connected():
         raise ConnectionError(f"Falha ao conectar ao provedor em {provider_url}")
+    # Polygon é chain PoS compatível com POA middleware
+    w3.middleware_onion.inject(geth_poa_middleware, layer=0)
     logger.info(f"Conectado com sucesso à rede (Chain ID: {w3.eth.chain_id}).")
 except (ValueError, ConnectionError) as e:
     logger.critical(e)
@@ -96,8 +99,8 @@ try:
     signed_tx = w3.eth.account.sign_transaction(tx_deploy, private_key=private_key)
     logger.info("Transação assinada. A enviar para a rede...")
 
-    # CORREÇÃO: Usar 'raw_transaction' em vez de 'rawTransaction'
-    tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+    # Usar atributo correto conforme web3.py: 'rawTransaction'
+    tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
     logger.info(f"Transação enviada! Hash: {tx_hash.hex()}")
     logger.info("A aguardar confirmação do bloco...")
 
