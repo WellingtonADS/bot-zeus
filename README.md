@@ -1,5 +1,7 @@
 # Bot ZEUS - v2.0
 
+> Guia completo (Regras de Negócio, Execução, Deploy e Troubleshooting): [doc/BOT_ZEUS_OVERVIEW.md](doc/BOT_ZEUS_OVERVIEW.md)
+
 ## Visão Geral
 
 O Bot ZEUS é um sistema de software para a automação de estratégias de arbitragem na blockchain Polygon. O seu objetivo é a identificação e execução de discrepâncias de preço para um mesmo ativo criptográfico entre múltiplas corretoras descentralizadas (DEXs).
@@ -33,11 +35,11 @@ O sistema é dividido em duas componentes que trabalham em harmonia:
 ├── /src/               \# Código fonte principal do bot (Python)
 │   ├── arbitrage.py
 │   ├── bot\_main.py
-│   ├── flash\_loan.py
-│   └── dex\_operations.py
+│   └── flash\_loan.py
 │
 ├── /utils/             \# Módulos de utilidades (Python)
 │   ├── config.py
+│   ├── dex\_operations.py
 │   ├── gas\_utils.py
 │   ├── liquidity\_utils.py
 │   ├── nonce\_utils.py
@@ -85,9 +87,29 @@ O sistema é dividido em duas componentes que trabalham em harmonia:
     ```bash
     pip install -r requirements.txt
     ```
-5.  **Configure as Variáveis de Ambiente:**
-    * Crie uma cópia do ficheiro `.env.example` (se existir) ou crie um novo ficheiro chamado `.env`.
-    * Preencha todas as variáveis necessárias: `INFURA_URL`, `WALLET_ADDRESS`, `PRIVATE_KEY`, e os endereços dos contratos das DEXs e dos tokens.
+5.  **Configure as Variáveis de Ambiente (.env):**
+        * Crie um ficheiro `.env` na raiz do projeto.
+        * Preencha as variáveis essenciais (exemplos abaixo) e mantenha-o fora do versionamento (já ignorado por `.gitignore`).
+
+### Variáveis essenciais do .env
+
+- Carteira / RPC:
+    - `WALLET_ADDRESS`, `PRIVATE_KEY`
+    - `CUSTOM_RPC_URL` ou `INFURA_URL`
+- Contratos do Bot:
+    - `FLASHLOAN_CONTRACT_ADDRESS`
+    - Opcional: `USE_FLASHLOAN_V2`, `FLASHLOAN_CONTRACT_ADDRESS_V2`
+- DEXs:
+    - Uniswap V3: `UNISWAP_V3_ROUTER_ADDRESS`, `QUOTER_ADDRESS`
+    - QuickSwap V2: `QUICKSWAP_ROUTER_ADDRESS` (e opcional `QUICKSWAP_FACTORY_ADDRESS`)
+    - SushiSwap V2: `SUSHISWAP_ROUTER_ADDRESS` (e opcional `SUSHISWAP_FACTORY_ADDRESS`)
+- Tokens:
+    - `USDC_ADDRESS`, `USDT_ADDRESS`, `WETH_ADDRESS`, `DAI_ADDRESS`, `WMATIC_ADDRESS`
+- Operação (valores padrão existem):
+    - `GAS_LIMIT`, `MIN_BALANCE_MATIC`, `SLIPPAGE_BPS`, `DEADLINE_SECONDS`
+    - `SCAN_TIME_BUDGET_SECONDS`, `SCAN_INTERVAL_SECONDS`, `TOKENS_ACTIVE`
+    - `V3_FEES`, `V3_MAX_HOPS`, `ENABLE_V3_MULTIHOP_SCAN`
+    - `MIN_PROFIT_USDC`, `DRY_RUN`, `LOG_V2_PATHS`
 
 ## Uso
 

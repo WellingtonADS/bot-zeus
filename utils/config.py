@@ -69,17 +69,19 @@ try:
     WALLET_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("WALLET_ADDRESS"))
     PRIVATE_KEY = obter_variavel_ambiente("PRIVATE_KEY")
     # Provedores RPC: suporte a múltiplos via fallback
-    # Ordem de preferência: INFURA_URL -> RPC_URL -> FORK_RPC_URL -> LOCAL_RPC_URL -> http://127.0.0.1:8545
+    # Ordem de preferência: CUSTOM_RPC_URL -> INFURA_URL -> RPC_URL -> FORK_RPC_URL -> LOCAL_RPC_URL -> http://127.0.0.1:8545
     PROVIDER_CANDIDATES = [
+        os.getenv("CUSTOM_RPC_URL"),
         os.getenv("INFURA_URL"),
-        os.getenv("RPC_URL"),
-        os.getenv("FORK_RPC_URL"),
-        os.getenv("LOCAL_RPC_URL"),
-        "http://127.0.0.1:8545",
+
     ]
 
     # Endereços dos contratos
     FLASHLOAN_CONTRACT_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("FLASHLOAN_CONTRACT_ADDRESS"))
+    # Suporte opcional a um segundo contrato (V2) com V3 multi-hop
+    USE_FLASHLOAN_V2 = os.getenv("USE_FLASHLOAN_V2", "0").lower() in ("1", "true", "yes", "on")
+    _fl_v2 = obter_variavel_ambiente_opcional("FLASHLOAN_CONTRACT_ADDRESS_V2")
+    FLASHLOAN_CONTRACT_ADDRESS_V2 = Web3.to_checksum_address(_fl_v2) if _fl_v2 else None
     UNISWAP_V3_ROUTER_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("UNISWAP_V3_ROUTER_ADDRESS"))
     QUOTER_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("QUOTER_ADDRESS"))
     SUSHISWAP_ROUTER_ADDRESS = Web3.to_checksum_address(obter_variavel_ambiente("SUSHISWAP_ROUTER_ADDRESS"))
@@ -124,7 +126,11 @@ if web3_instance is None:
         logger.critical(f"Último erro: {last_err}")
     raise ConnectionError("Não foi possível conectar à rede Polygon.")
 
-logger.info(f"Conexão com a rede Polygon estabelecida com sucesso. URL: {chosen_url}")
+try:
+    net_id = web3_instance.eth.chain_id
+except Exception:
+    net_id = 'desconhecido'
+logger.info(f"Conexão com a rede Polygon estabelecida com sucesso. URL: {chosen_url} | chainId: {net_id}")
 
 
 # --- 3. FUNÇÕES UTILITÁRIAS E CARREGAMENTO DE CONTRATOS ---
@@ -167,6 +173,17 @@ TOKENS = {
     "dai": {"address": DAI_ADDRESS, "decimals": 18},
     "wmatic": {"address": WMATIC_ADDRESS, "decimals": 18},
 }
+
+# Lista de tokens ativos para varredura (permite restringir universo via .env)
+_tokens_active_env = os.getenv("TOKENS_ACTIVE")
+if _tokens_active_env:
+    _requested = [t.strip().lower() for t in _tokens_active_env.split(",") if t.strip()]
+    ACTIVE_TOKENS = [TOKENS[k] for k in _requested if k in TOKENS]
+    if not ACTIVE_TOKENS:
+        logger.warning("TOKENS_ACTIVE não corresponde a tokens conhecidos. Usando todos os tokens do catálogo.")
+        ACTIVE_TOKENS = list(TOKENS.values())
+else:
+    ACTIVE_TOKENS = list(TOKENS.values())
 
 _token_decimals_cache = {}
 def obter_decimais_token(w3: Web3, token_address: str) -> int:
@@ -252,7 +269,15 @@ dex_contracts = {
     }
 }
 
-flashloan_contract = carregar_contrato("FlashLoanReceiver.json", FLASHLOAN_CONTRACT_ADDRESS, "FlashLoan Receiver")
+if 'USE_FLASHLOAN_V2' in globals() and USE_FLASHLOAN_V2:
+    if not FLASHLOAN_CONTRACT_ADDRESS_V2:
+        logger.critical("USE_FLASHLOAN_V2=on mas FLASHLOAN_CONTRACT_ADDRESS_V2 não foi definido no .env")
+        raise ValueError("Endereço do contrato V2 ausente")
+    flashloan_contract = carregar_contrato("FlashLoanReceiverV2.json", FLASHLOAN_CONTRACT_ADDRESS_V2, "FlashLoan Receiver V2")
+    _active_flashloan_addr = FLASHLOAN_CONTRACT_ADDRESS_V2
+else:
+    flashloan_contract = carregar_contrato("FlashLoanReceiver.json", FLASHLOAN_CONTRACT_ADDRESS, "FlashLoan Receiver")
+    _active_flashloan_addr = FLASHLOAN_CONTRACT_ADDRESS
 
 # Dicionário de configuração final
 config = {
@@ -263,6 +288,11 @@ config = {
     "wallet_address": WALLET_ADDRESS,
     "private_key": PRIVATE_KEY,
     "flashloan_contract": flashloan_contract,
+    # Endereços dos contratos (expostos para diagnósticos)
+    "flashloan_contract_v1_address": FLASHLOAN_CONTRACT_ADDRESS,
+    "flashloan_contract_v2_address": FLASHLOAN_CONTRACT_ADDRESS_V2,
+    "active_flashloan_contract_address": _active_flashloan_addr,
+    "use_flashloan_v2": bool('USE_FLASHLOAN_V2' in globals() and USE_FLASHLOAN_V2),
     "TOKENS": TOKENS,
     "to_base": converter_para_unidade_base,
     "from_base": converter_de_unidade_base,
@@ -275,6 +305,20 @@ config = {
     # DEADLINE_SECONDS: segundos adicionados ao timestamp atual para expirar swaps
     "gas_limit": int(os.getenv("GAS_LIMIT", "3000000")),
     "min_balance_matic": Decimal(os.getenv("MIN_BALANCE_MATIC", "5")),
-    "slippage_bps": int(os.getenv("SLIPPAGE_BPS", "50")),
-    "deadline_seconds": int(os.getenv("DEADLINE_SECONDS", "120")),
+    # Defaults mais tolerantes para produção (podem ser sobrescritos no .env)
+    "slippage_bps": int(os.getenv("SLIPPAGE_BPS", "70")),
+    "deadline_seconds": int(os.getenv("DEADLINE_SECONDS", "180")),
+    # Parâmetros de varredura
+    "scan_time_budget_seconds": int(os.getenv("SCAN_TIME_BUDGET_SECONDS", "120")),
+    "scan_interval_seconds": int(os.getenv("SCAN_INTERVAL_SECONDS", "15")),
+    # Controle de escaneamento V3 multi-hop
+    "v3_fee_choices": [int(x) for x in os.getenv("V3_FEES", "500,3000").split(",") if x.strip().isdigit()],
+    "v3_max_hops": int(os.getenv("V3_MAX_HOPS", "2")),
+    "enable_v3_multihop_scan": os.getenv("ENABLE_V3_MULTIHOP_SCAN", "1").lower() in ("1","true","yes","on"),
+    # Tokens ativos para varredura
+    "ACTIVE_TOKENS": ACTIVE_TOKENS,
+    # Estratégias triangulares (apenas logging/priorização off-chain)
+    "triangular_mode": os.getenv("TRIANGULAR_MODE", "0").lower() in ("1","true","yes","on"),
+    "triangular_only": os.getenv("TRIANGULAR_ONLY", "0").lower() in ("1","true","yes","on"),
+    "triangular_log_topk": int(os.getenv("TRIANGULAR_LOG_TOPK", "3")),
 }

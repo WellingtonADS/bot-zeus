@@ -67,23 +67,27 @@ contract FlashLoanReceiver is IFlashLoanReceiver, Ownable {
             address dexVenda,
             uint256 amountOutMin1,
             uint256 amountOutMin2,
-            uint256 deadline
+            uint256 deadline,
+            uint24 feeCompra,
+            uint24 feeVenda,
+            address[] memory pathCompraV2,
+            address[] memory pathVendaV2
         ) = abi.decode(
             params,
-            (address, address, address, uint256, uint256, uint256)
+            (address, address, address, uint256, uint256, uint256, uint24, uint24, address[], address[])
         );
 
         address tokenEmprestado = assets[0];
         uint256 quantidadeEmprestada = amounts[0];
 
-    IERC20(tokenEmprestado).approve(dexCompra, quantidadeEmprestada);
-    _executeSwap(dexCompra, tokenEmprestado, tokenAlvo, quantidadeEmprestada, amountOutMin1, deadline);
+        IERC20(tokenEmprestado).approve(dexCompra, quantidadeEmprestada);
+        _executeSwap(dexCompra, tokenEmprestado, tokenAlvo, quantidadeEmprestada, amountOutMin1, deadline, feeCompra, pathCompraV2);
 
         uint256 saldoTokenAlvo = IERC20(tokenAlvo).balanceOf(address(this));
         require(saldoTokenAlvo > 0, "FlashLoanReceiver: Compra do token alvo falhou.");
 
-    IERC20(tokenAlvo).approve(dexVenda, saldoTokenAlvo);
-    _executeSwap(dexVenda, tokenAlvo, tokenEmprestado, saldoTokenAlvo, amountOutMin2, deadline);
+        IERC20(tokenAlvo).approve(dexVenda, saldoTokenAlvo);
+        _executeSwap(dexVenda, tokenAlvo, tokenEmprestado, saldoTokenAlvo, amountOutMin2, deadline, feeVenda, pathVendaV2);
 
         uint256 valorADevolver = quantidadeEmprestada + premiums[0];
         uint256 saldoFinalTokenEmprestado = IERC20(tokenEmprestado).balanceOf(address(this));
@@ -109,32 +113,44 @@ contract FlashLoanReceiver is IFlashLoanReceiver, Ownable {
         address tokenOut,
         uint256 amountIn,
         uint256 amountOutMinimum,
-        uint256 deadline
+        uint256 deadline,
+        uint24 fee,
+        address[] memory v2Path
     ) internal {
-        try ISwapRouter(dexRouter).exactInputSingle(
-            ISwapRouter.ExactInputSingleParams({
-                tokenIn: tokenIn,
-                tokenOut: tokenOut,
-                fee: 3000,
-                recipient: address(this),
-                deadline: deadline,
-                amountIn: amountIn,
-                amountOutMinimum: amountOutMinimum,
-                sqrtPriceLimitX96: 0
-            })
-        ) {
-            return;
-        } catch {
+        if (fee > 0) {
+            // Uniswap V3 exata por perna
+            try ISwapRouter(dexRouter).exactInputSingle(
+                ISwapRouter.ExactInputSingleParams({
+                    tokenIn: tokenIn,
+                    tokenOut: tokenOut,
+                    fee: fee,
+                    recipient: address(this),
+                    deadline: deadline,
+                    amountIn: amountIn,
+                    amountOutMinimum: amountOutMinimum,
+                    sqrtPriceLimitX96: 0
+                })
+            ) {
+                return;
+            } catch {
+                revert("FlashLoanReceiver: Swap V3 falhou.");
+            }
+        } else {
+            // Uniswap V2 (Quick/Sushi) com path dinâmico
+            address[] memory path = v2Path;
+            if (path.length < 2) {
+                path = _getPathFor(tokenIn, tokenOut);
+            }
             try IUniswapV2Router(dexRouter).swapExactTokensForTokens(
                 amountIn,
                 amountOutMinimum,
-                _getPathFor(tokenIn, tokenOut),
+                path,
                 address(this),
                 deadline
             ) {
                 return;
             } catch {
-                revert("FlashLoanReceiver: Falha na execucao do swap.");
+                revert("FlashLoanReceiver: Swap V2 falhou.");
             }
         }
     }
