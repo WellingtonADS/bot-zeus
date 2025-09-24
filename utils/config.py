@@ -73,7 +73,8 @@ try:
     PROVIDER_CANDIDATES = [
         os.getenv("CUSTOM_RPC_URL"),
         os.getenv("INFURA_URL"),
-
+        os.getenv("ALCHEMY_URL"),
+        os.getenv("RPC_URL"),
     ]
 
     # Endereços dos contratos
@@ -107,9 +108,10 @@ except ValueError as e:
 last_err = None
 web3_instance = None
 chosen_url = None
+rpc_timeout = float(os.getenv("RPC_TIMEOUT_SECONDS", "10"))
 for candidate in [url for url in PROVIDER_CANDIDATES if url]:
     try:
-        w3 = Web3(Web3.HTTPProvider(candidate))
+        w3 = Web3(Web3.HTTPProvider(candidate, request_kwargs={"timeout": rpc_timeout}))
         w3.middleware_onion.inject(geth_poa_middleware, layer=0)
         if w3.is_connected():
             web3_instance = w3
@@ -184,6 +186,18 @@ if _tokens_active_env:
         ACTIVE_TOKENS = list(TOKENS.values())
 else:
     ACTIVE_TOKENS = list(TOKENS.values())
+
+# Parâmetros de varredura/rotas V3/V2
+def _parse_int_list(env_val: str, default: list[int]) -> list[int]:
+    try:
+        parts = [int(x.strip()) for x in env_val.split(",") if x.strip()]
+        return parts or default
+    except Exception:
+        return default
+
+V3_FEE_CHOICES = _parse_int_list(os.getenv("V3_FEE_CHOICES", ""), [500, 3000])
+V3_MAX_HOPS = int(os.getenv("V3_MAX_HOPS", "1"))  # 0=single-hop, 1=um hub, 2=dois hubs
+V2_MAX_HOPS = int(os.getenv("V2_MAX_HOPS", "1"))  # 0=direct, 1=um hub, 2=dois hubs
 
 _token_decimals_cache = {}
 def obter_decimais_token(w3: Web3, token_address: str) -> int:

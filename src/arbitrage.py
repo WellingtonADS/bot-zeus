@@ -26,9 +26,10 @@ from utils.liquidity_utils import (
     encode_v3_path,
 )
 from utils.optimization_utils import calcular_quantidade_otima
-from utils.wallet_manager import verificar_saldo_matic_suficiente
+from utils.wallet_manager import verificar_saldo_matic_suficiente, verificar_saldo_stables_minimo
 from utils.price_oracle import obter_preco_matic_em_usdc
 from utils.gas_utils import obter_taxa_gas
+from utils.rpc_utils import maybe_failover_if_stale, maybe_return_to_preferred, record_ping, log_metrics_if_due
 
 # --- Variáveis Globais do Módulo ---
 web3 = config['web3']
@@ -47,6 +48,12 @@ TRIANGULAR_MODE = bool(config.get('triangular_mode', False))
 TRIANGULAR_ONLY = bool(config.get('triangular_only', False))
 TRIANGULAR_LOG_TOPK = int(config.get('triangular_log_topk', 3))
 
+# Monitor leve de saúde do RPC (detecta blocos estagnados)
+_last_block_state = {"num": None, "ts": 0.0}
+# Heurísticas anti-saturação/volatilidade
+_last_block_time = None
+_ema_block_time = None  # ms
+
 def _addr_to_sym(addr: str) -> str:
     try:
         a = web3.to_checksum_address(addr)
@@ -63,7 +70,8 @@ def _addr_to_sym(addr: str) -> str:
 def calcular_lucro_liquido_esperado(
     lucro_bruto_base: int,
     quantidade_emprestimo_base: int,
-    token_emprestimo_address: str
+    token_emprestimo_address: str,
+    override_gas_units: int | None = None
 ) -> Decimal:
     """
     Calcula o lucro líquido esperado de uma operação, descontando todos os custos.
@@ -75,7 +83,8 @@ def calcular_lucro_liquido_esperado(
 
     # CORREÇÃO: Chamar a função obter_taxa_gas diretamente
     preco_gas_gwei = Decimal(obter_taxa_gas(web3, logger))
-    gas_limit = Decimal(config['gas_limit'])
+    # Usar override de gas units se fornecido; caso contrário, limite padrão
+    gas_limit_units = Decimal(override_gas_units if override_gas_units is not None else int(config['gas_limit']))
     preco_matic_usdc = obter_preco_matic_em_usdc()
     
     if preco_matic_usdc == 0:
@@ -84,7 +93,7 @@ def calcular_lucro_liquido_esperado(
     else:
         # Correção: converter corretamente gwei->wei e depois wei->MATIC
         gas_price_wei = web3.to_wei(preco_gas_gwei, 'gwei')
-        custo_gas_wei = int(gas_limit) * int(gas_price_wei)
+        custo_gas_wei = int(gas_limit_units) * int(gas_price_wei)
         custo_gas_matic = web3.from_wei(custo_gas_wei, 'ether')
         custo_gas_usdc = custo_gas_matic * preco_matic_usdc
 
@@ -261,7 +270,27 @@ def identificar_melhor_oportunidade(token_emprestimo: str):
                             path2_len = 0
 
                     lucro_bruto_base = amount_out_swap2 - quantidade_otima_base
-                    lucro_liquido = calcular_lucro_liquido_esperado(lucro_bruto_base, quantidade_otima_base, token_emprestimo)
+                    # Estimar unidades de gás baseadas em hops V2/V3 (aproximação leve)
+                    try:
+                        hops_v2 = 0
+                        hops_v3 = 0
+                        if "V2" in dex_compra_nome:
+                            hops_v2 += max(1, (path1_len - 1)) if path1_len else 1
+                        else:
+                            hops_v3 += max(1, (path1_len - 1)) if path1_len else 1
+                        if "V2" in dex_venda_nome:
+                            hops_v2 += max(1, (path2_len - 1)) if path2_len else 1
+                        else:
+                            hops_v3 += max(1, (path2_len - 1)) if path2_len else 1
+                        # Custos médios aproximados por hop (Polygon): V2~115k, V3~130k
+                        gas_units = 50_000  # overhead base
+                        gas_units += hops_v2 * 115_000
+                        gas_units += hops_v3 * 130_000
+                        # Clamp a um teto razoável para evitar extremos
+                        gas_units = min(gas_units, int(config.get('gas_limit', 3_000_000)))
+                    except Exception:
+                        gas_units = None
+                    lucro_liquido = calcular_lucro_liquido_esperado(lucro_bruto_base, quantidade_otima_base, token_emprestimo, override_gas_units=gas_units)
 
                     # Guardar candidato para TOP3
                     try:
@@ -498,6 +527,7 @@ def executar_arbitragem_com_flashloan(oportunidade: dict):
 
 def iniciar_bot_arbitragem(stop_event):
     """Inicia o bot de arbitragem em loop contínuo."""
+    global web3
     TOKEN_EMPRESTIMO = TOKENS['usdc']['address']
 
     logger.info("Bot de Arbitragem ZEUS v2.0 (Otimizado) iniciado.")
@@ -505,9 +535,79 @@ def iniciar_bot_arbitragem(stop_event):
     while not stop_event.is_set():
         try:
             ciclo_inicio = time.time()
+            # Monitor RPC: alerta se bloco não avança por >120s
+            try:
+                bn = int(web3.eth.block_number)
+                now = time.time()
+                # Telemetria de latência aproximada por diferença de tempo entre blocos
+                global _last_block_time, _ema_block_time
+                if _last_block_time is not None:
+                    dt_ms = (now - _last_block_time) * 1000.0
+                    if _ema_block_time is None:
+                        _ema_block_time = dt_ms
+                    else:
+                        _ema_block_time = 0.2 * dt_ms + 0.8 * _ema_block_time
+                    record_ping(_ema_block_time or dt_ms)
+                _last_block_time = now
+
+                if _last_block_state["num"] is not None and bn <= int(_last_block_state["num"]) and (now - float(_last_block_state["ts"])) > 120:
+                    logger.warning("RPC possivelmente estagnado: bloco não avançou por >120s (atual=%s). Tentando failover...", bn)
+                    try:
+                        if maybe_failover_if_stale(120):
+                            # Atualizar web3 local a partir do config global
+                            web3 = config['web3']
+                            logger.info("Failover aplicado. Novo provider ativo.")
+                            # Reset estado para novo provider
+                            _last_block_state["num"] = None
+                            _last_block_state["ts"] = 0.0
+                    except Exception as _e:
+                        logger.error("Falha ao tentar failover automático: %s", _e)
+                if _last_block_state["num"] != bn:
+                    _last_block_state["num"] = bn
+                    _last_block_state["ts"] = now
+                # Tentar retorno ao provider preferido periodicamente
+                try:
+                    maybe_return_to_preferred(logger)
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.debug("Falha ao ler número do bloco para health-check: %s", e)
+
             if not verificar_saldo_matic_suficiente(web3, wallet_address, min_balance_matic):
                 time.sleep(300)
                 continue
+
+            # Checagem de estáveis mínimos (opcional; configurável por .env)
+            try:
+                from decimal import Decimal as _D
+                min_usdc_env = os.getenv("MIN_USDC", "0")
+                min_usdt_env = os.getenv("MIN_USDT", "0")
+                min_usdc = _D(min_usdc_env) if min_usdc_env else _D("0")
+                min_usdt = _D(min_usdt_env) if min_usdt_env else _D("0")
+            except Exception:
+                min_usdc = Decimal("0")
+                min_usdt = Decimal("0")
+            if (min_usdc > 0 or min_usdt > 0) and not verificar_saldo_stables_minimo(web3, wallet_address, min_usdc=min_usdc, min_usdt=min_usdt):
+                logger.info("Aguardando 5 minutos antes de tentar novamente devido a saldos estáveis insuficientes.")
+                time.sleep(300)
+                continue
+
+            # Anti-saturação: se orçamento muito apertado no último ciclo, fazer um ciclo de varredura parcial
+            try:
+                budget_sec = int(os.getenv('SCAN_TIME_BUDGET_SECONDS', str(config.get('scan_time_budget_seconds', 120))))
+                fast_scan = False
+                if budget_sec <= 60:
+                    fast_scan = True
+                if _ema_block_time and _ema_block_time > 2000:
+                    # latência alta -> fazer uma varredura mais conservadora
+                    fast_scan = True
+                if fast_scan:
+                    logger.info("Orçamento/latência apertados: usando varredura parcial (menos combinações e grid menor).")
+                    # Temporariamente reduzir ACTIVE_TOKENS a um subconjunto (ex.: 3 primeiros)
+                    old_active = config.get('ACTIVE_TOKENS', [])
+                    config['ACTIVE_TOKENS'] = old_active[:3] if len(old_active) > 3 else old_active
+            except Exception:
+                pass
 
             logger.info("Procurando nova oportunidade de arbitragem otimizada...")
             melhor_oportunidade = identificar_melhor_oportunidade(TOKEN_EMPRESTIMO)
@@ -555,6 +655,19 @@ def iniciar_bot_arbitragem(stop_event):
                 )
         except Exception:
             pass
+        # Ajuste dinâmico leve de slippage/deadline baseado em latência
+        try:
+            if _ema_block_time and _ema_block_time > 2500:
+                os.environ['SLIPPAGE_BPS'] = str(max(50, int(config.get('slippage_bps', 70))))
+                os.environ['DEADLINE_SECONDS'] = str(max(240, int(config.get('deadline_seconds', 180))))
+            else:
+                # valores padrão do config prevalecem; não forçar
+                pass
+        except Exception:
+            pass
+
+        log_metrics_if_due(logger)
+
         logger.info(f"Aguardando {intervalo_segundos} segundos para a próxima verificação.")
         time.sleep(intervalo_segundos)
 

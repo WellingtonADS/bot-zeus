@@ -8,6 +8,24 @@ base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(base_dir)
 
 from utils.config import config, logger
+from utils.rpc_utils import record_fail
+import time
+
+# Cache TTL simples para evitar chamadas repetidas no mesmo ciclo
+_quote_cache: dict[tuple, tuple[float, int]] = {}
+_CACHE_TTL_SEC = float(os.getenv("QUOTE_CACHE_TTL_SEC", "2"))
+
+def _cache_get(key: tuple) -> int | None:
+    ent = _quote_cache.get(key)
+    if not ent:
+        return None
+    ts, val = ent
+    if time.time() - ts > _CACHE_TTL_SEC:
+        return None
+    return val
+
+def _cache_set(key: tuple, value: int):
+    _quote_cache[key] = (time.time(), value)
 
 # Variáveis principais do módulo
 web3 = config['web3']
@@ -55,8 +73,14 @@ def quote_v3_multihop(token_in: str, token_out: str, amount_in: int, fee_choices
             continue
     from utils.config import config as _cfg
     # Permitir configurar fee tiers via .env; fallback para parâmetros explícitos
-    fees_all = fee_choices or _cfg.get('v3_fee_choices', [500, 3000])
-    max_hops = int(_cfg.get('v3_max_hops', 2))
+    try:
+        fees_all = fee_choices or _cfg.get('V3_FEE_CHOICES', [500, 3000])
+    except Exception:
+        fees_all = fee_choices or [500, 3000]
+    try:
+        max_hops = int(_cfg.get('V3_MAX_HOPS', 1))
+    except Exception:
+        max_hops = 1
 
     candidates: List[tuple[List[str], List[int]]] = []
     # Direto (equivalente ao single-hop)
@@ -168,9 +192,24 @@ def obter_preco_saida(dex_nome: str, token_in_address: str, token_out_address: s
             melhor = 0
             for fee in fees:
                 try:
-                    out = quoter_contract.functions.quoteExactInputSingle(
-                        token_in, token_out, fee, quantidade_base_in, 0
-                    ).call()
+                    cache_key = ("v3_single", token_in, token_out, fee, quantidade_base_in)
+                    cached = _cache_get(cache_key)
+                    if cached is not None:
+                        out = cached
+                    else:
+                        # retries leves
+                        out = 0
+                        for _ in range(2):
+                            try:
+                                out = quoter_contract.functions.quoteExactInputSingle(
+                                    token_in, token_out, fee, quantidade_base_in, 0
+                                ).call()
+                                break
+                            except Exception:
+                                record_fail()
+                                time.sleep(0.1)
+                        if out:
+                            _cache_set(cache_key, out)
                     if out > melhor:
                         melhor = out
                 except Exception as e:
@@ -182,8 +221,23 @@ def obter_preco_saida(dex_nome: str, token_in_address: str, token_out_address: s
         elif dex_nome in ["SushiSwapV2", "QuickSwapV2"]:
             router_contract = config['dex_contracts'][dex_nome]['router']
             path = [token_in, token_out]
-            amounts_out = router_contract.functions.getAmountsOut(quantidade_base_in, path).call()
-            return amounts_out[1]
+            cache_key = ("v2_path", tuple(path), quantidade_base_in)
+            cached = _cache_get(cache_key)
+            if cached is not None:
+                amounts_out_1 = cached
+            else:
+                amounts_out_1 = 0
+                for _ in range(2):
+                    try:
+                        amounts_out = router_contract.functions.getAmountsOut(quantidade_base_in, path).call()
+                        amounts_out_1 = amounts_out[1]
+                        break
+                    except Exception:
+                        record_fail()
+                        time.sleep(0.1)
+                if amounts_out_1:
+                    _cache_set(cache_key, amounts_out_1)
+            return amounts_out_1
 
         else:
             logger.warning(f"DEX '{dex_nome}' não suportada pela função obter_preco_saida.")
@@ -213,9 +267,23 @@ def obter_preco_saida_e_fee(dex_nome: str, token_in_address: str, token_out_addr
             melhor_fee = 3000
             for fee in fees:
                 try:
-                    out = quoter_contract.functions.quoteExactInputSingle(
-                        token_in, token_out, fee, quantidade_base_in, 0
-                    ).call()
+                    cache_key = ("v3_single_fee", token_in, token_out, fee, quantidade_base_in)
+                    cached = _cache_get(cache_key)
+                    if cached is not None:
+                        out = cached
+                    else:
+                        out = 0
+                        for _ in range(2):
+                            try:
+                                out = quoter_contract.functions.quoteExactInputSingle(
+                                    token_in, token_out, fee, quantidade_base_in, 0
+                                ).call()
+                                break
+                            except Exception:
+                                record_fail()
+                                time.sleep(0.1)
+                        if out:
+                            _cache_set(cache_key, out)
                     if out > melhor:
                         melhor = out
                         melhor_fee = fee
@@ -225,8 +293,23 @@ def obter_preco_saida_e_fee(dex_nome: str, token_in_address: str, token_out_addr
         elif dex_nome in ["SushiSwapV2", "QuickSwapV2"]:
             router_contract = config['dex_contracts'][dex_nome]['router']
             path = [token_in, token_out]
-            amounts_out = router_contract.functions.getAmountsOut(quantidade_base_in, path).call()
-            return amounts_out[1], 0
+            cache_key = ("v2_path_fee", tuple(path), quantidade_base_in)
+            cached = _cache_get(cache_key)
+            if cached is not None:
+                outv = cached
+            else:
+                outv = 0
+                for _ in range(2):
+                    try:
+                        amounts_out = router_contract.functions.getAmountsOut(quantidade_base_in, path).call()
+                        outv = amounts_out[1]
+                        break
+                    except Exception:
+                        record_fail()
+                        time.sleep(0.1)
+                if outv:
+                    _cache_set(cache_key, outv)
+            return outv, 0
         else:
             logger.warning(f"DEX '{dex_nome}' não suportada pela função obter_preco_saida_e_fee.")
             return 0, 0
@@ -266,17 +349,22 @@ def _candidate_v2_paths(token_in: str, token_out: str) -> List[List[str]]:
         if h != token_in and h != token_out:
             paths.append([token_in, h, token_out])
 
-    # 2 intermediários (ordem importa; limitar combinações triviais)
-    for i in range(len(hubs)):
-        for j in range(len(hubs)):
-            if i == j:
-                continue
-            h1 = hubs[i]
-            h2 = hubs[j]
-            if h1 in (token_in, token_out) or h2 in (token_in, token_out):
-                continue
-            # Evitar repetições tipo [h1,h2] e [h2,h1] sendo ambos incluídos em excesso
-            paths.append([token_in, h1, h2, token_out])
+    # 2 intermediários (ordem importa; limitar combinações) — controlado via V2_MAX_HOPS
+    try:
+        from utils.config import V2_MAX_HOPS as _V2_MAX_HOPS
+    except Exception:
+        _V2_MAX_HOPS = 1
+    if _V2_MAX_HOPS >= 2:
+        for i in range(len(hubs)):
+            for j in range(len(hubs)):
+                if i == j:
+                    continue
+                h1 = hubs[i]
+                h2 = hubs[j]
+                if h1 in (token_in, token_out) or h2 in (token_in, token_out):
+                    continue
+                # Evitar repetições tipo [h1,h2] e [h2,h1] sendo ambos incluídos em excesso
+                paths.append([token_in, h1, h2, token_out])
 
     # Remover duplicados mantendo ordem e limitar a 4 nós
     unique: List[List[str]] = []
@@ -304,8 +392,22 @@ def obter_melhor_caminho_v2_e_quote(dex_nome: str, token_in_address: str, token_
         best_path: List[str] = []
         for path in _candidate_v2_paths(token_in_address, token_out_address):
             try:
-                amounts = router_contract.functions.getAmountsOut(quantidade_base_in, path).call()
-                out = amounts[-1]
+                cache_key = ("v2_best", tuple(path), quantidade_base_in)
+                cached = _cache_get(cache_key)
+                if cached is not None:
+                    out = cached
+                else:
+                    out = 0
+                    for _ in range(2):
+                        try:
+                            amounts = router_contract.functions.getAmountsOut(quantidade_base_in, path).call()
+                            out = amounts[-1]
+                            break
+                        except Exception:
+                            record_fail()
+                            time.sleep(0.1)
+                    if out:
+                        _cache_set(cache_key, out)
                 if out > best_out:
                     best_out = out
                     best_path = path

@@ -79,14 +79,48 @@ def iniciar_operacao_flash_loan(
         )
 
         nonce = nonce_manager.get_nonce(refresh=True)
-        gas_price_gwei = obter_taxa_gas(web3, logger)
-        
-        tx = tx_func.build_transaction({
+        # Gas limit dinâmico com bump de segurança (ex.: +15%) e cap pelo config
+        try:
+            gas_est = tx_func.estimate_gas({'from': config['wallet_address']})
+            gas_est = int(gas_est * 1.15)
+            gas_limit = min(gas_est, int(config['gas_limit']))
+        except Exception:
+            gas_limit = int(config['gas_limit'])
+
+        # EIP-1559: preferir maxFeePerGas/maxPriorityFeePerGas quando disponível
+        try:
+            pending_block = web3.eth.get_block('pending')
+            base_fee = pending_block.get('baseFeePerGas') if isinstance(pending_block, dict) else getattr(pending_block, 'baseFeePerGas', None)
+        except Exception:
+            base_fee = None
+        max_fee = None
+        max_priority = None
+        if base_fee is not None:
+            # Estratégia simples: priority ~1.5 gwei (ajustável via env), maxFee = base*2 + priority
+            prio_gwei = float(os.getenv('PRIORITY_FEE_GWEI', '1.5'))
+            max_priority = Web3.to_wei(prio_gwei, 'gwei')
+            max_fee = base_fee * 2 + max_priority
+        else:
+            # Fallback para gasPrice legado
+            gas_price_gwei = obter_taxa_gas(web3, logger)
+
+        common = {
             'chainId': web3.eth.chain_id,
-            'gas': config['gas_limit'],
-            'gasPrice': Web3.to_wei(gas_price_gwei, 'gwei'),
+            'gas': gas_limit,
             'nonce': nonce,
-        })
+        }
+        if max_fee is not None and max_priority is not None:
+            tx = tx_func.build_transaction({
+                **common,
+                'maxFeePerGas': int(max_fee),
+                'maxPriorityFeePerGas': int(max_priority),
+                'type': 2,
+            })
+        else:
+            tx = tx_func.build_transaction({
+                **common,
+                'gasPrice': Web3.to_wei(gas_price_gwei, 'gwei'),
+            })
 
         tx_hash = enviar_transacao_assinada(tx)
         receipt = aguardar_recibo_transacao(tx_hash)
